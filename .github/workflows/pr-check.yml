@@ -1,0 +1,97 @@
+name: PR Validation & Linting
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Manifest & Scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate manifest.json syntax & references
+        run: |
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync("manifest.json", "utf-8");
+            let manifest;
+            try {
+              manifest = JSON.parse(raw);
+              console.log("✓ manifest.json is valid JSON");
+            } catch (err) {
+              console.error("✗ Failed to parse manifest.json:", err.message);
+              process.exit(1);
+            }
+
+            if (manifest.manifest_version !== 3) {
+              console.error("✗ Expected manifest_version to be 3, found:", manifest.manifest_version);
+              process.exit(1);
+            }
+            console.log("✓ Manifest V3 confirmed");
+
+            const checkFile = (path, desc) => {
+              if (!fs.existsSync(path)) {
+                console.error(`✗ Missing referenced ${desc}: ${path}`);
+                process.exit(1);
+              }
+              console.log(`✓ Verified ${desc}: ${path}`);
+            };
+
+            if (manifest.background && manifest.background.service_worker) {
+              checkFile(manifest.background.service_worker, "service worker");
+            }
+
+            if (manifest.side_panel && manifest.side_panel.default_path) {
+              checkFile(manifest.side_panel.default_path, "side panel HTML");
+            }
+
+            if (manifest.options_page) {
+              checkFile(manifest.options_page, "options page");
+            }
+
+            if (manifest.options_ui && manifest.options_ui.page) {
+              checkFile(manifest.options_ui.page, "options UI page");
+            }
+
+            if (manifest.action && manifest.action.default_icon) {
+              const icons = typeof manifest.action.default_icon === "string"
+                ? { default: manifest.action.default_icon }
+                : manifest.action.default_icon;
+              Object.entries(icons).forEach(([size, path]) => {
+                checkFile(path, `action icon (${size})`);
+              });
+            }
+
+            if (manifest.content_scripts) {
+              manifest.content_scripts.forEach((cs) => {
+                (cs.js || []).forEach(f => checkFile(f, "content script"));
+              });
+            }
+
+            if (manifest.icons) {
+              Object.entries(manifest.icons).forEach(([size, path]) => {
+                checkFile(path, `icon (${size}px)`);
+              });
+            }
+          '
+
+      - name: JavaScript Syntax Check
+        run: |
+          echo "Checking JavaScript syntax..."
+          for file in *.js; do
+            if [ -f "$file" ]; then
+              node --check "$file"
+              echo "✓ Syntax OK: $file"
+            fi
+          done

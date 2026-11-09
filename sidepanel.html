@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Question Helper</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="panel-container">
+    <!-- Header -->
+    <header class="panel-header">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="Logo" class="brand-icon">
+        <div class="brand-text">
+          <h1 class="brand-title">Question Helper</h1>
+          <span class="status-indicator idle" id="statusIndicator">
+            <span class="status-dot"></span>
+            <span class="status-text" id="statusText">Ready</span>
+          </span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btnScreenshot" class="icon-btn" title="Use a screenshot of this tab as the question">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+            <circle cx="12" cy="13" r="4"></circle>
+          </svg>
+        </button>
+        <button id="btnUploadImage" class="icon-btn" title="Upload (or paste) an image of a question">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+        </button>
+        <input type="file" id="fileInputImage" accept="image/*" style="display: none;">
+        <button id="btnOptions" class="icon-btn" title="Open Settings">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Error Banner -->
+    <div id="errorBanner" class="banner error hidden">
+      <div class="banner-content">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span id="errorMessage">Error details</span>
+      </div>
+      <button id="btnDismissError" class="banner-close" title="Dismiss">&times;</button>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="panel-body">
+      <!-- Section 1: Detected Question -->
+      <section class="card question-card" id="questionCard">
+        <div class="card-header">
+          <span class="card-label">CURRENT QUESTION</span>
+          <div class="card-tags">
+            <span id="blankInputsBadge" class="tag fill-blank-tag hidden">✏️ Fill-in Blank</span>
+            <span id="selectorTag" class="tag hidden">Heuristic</span>
+            <span id="visualTag" class="tag visual hidden">Canvas/Image</span>
+            <button id="btnRereadPage" class="icon-btn small" title="Re-read the question from the page">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+            </button>
+            <button id="btnToggleQuestionExpand" class="icon-btn small" title="Expand / Collapse Question Box">
+              <svg id="expandIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="card-content" id="questionCardContent">
+          <div id="emptyQuestionState" class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <p class="empty-title">Waiting for Question...</p>
+            <p class="empty-desc">Open a practice question, or use <strong>Capture Tab</strong> / upload an image if the question is a picture or inside a canvas.</p>
+          </div>
+          <div id="detectedQuestionContent" class="question-content hidden">
+            <div id="questionText" class="question-text markdown-body"></div>
+            <div id="questionImages" class="question-images hidden"></div>
+            <div id="optionsList" class="options-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Tutor Conversation -->
+      <section class="card answer-card" id="answerCard">
+        <div class="card-header">
+          <span class="card-label" id="answerCardLabel">TUTOR</span>
+          <div class="card-tags">
+            <span id="modelBadge" class="tag model-tag">gemini-2.5-flash</span>
+            <button id="btnResetConversation" class="icon-btn small hidden" title="Start this question over">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+              </svg>
+            </button>
+            <button id="btnToggleAnswerExpand" class="icon-btn small" title="Expand / Collapse Tutor Box">
+              <svg id="expandAnswerIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="card-content" id="answerCardContent">
+          <!-- Empty State -->
+          <div id="emptyAnswerState" class="empty-state">
+            <div class="empty-icon">💡</div>
+            <p class="empty-title">Work through it together</p>
+            <p class="empty-desc" id="emptyAnswerDesc">Ask for a hint, or type your answer below and the tutor will tell you if you're on the right track.</p>
+          </div>
+
+          <!-- Conversation -->
+          <div id="conversation" class="conversation hidden"></div>
+
+          <!-- Thinking animation state -->
+          <div id="thinkingState" class="thinking-state hidden">
+            <div class="shimmer-brain">
+              <span class="pulsing-orbit"></span>
+              <span class="pulsing-core"></span>
+            </div>
+            <p class="thinking-text" id="thinkingText">The tutor is thinking...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Composer -->
+      <section class="composer" id="composer">
+        <label for="attemptInput" class="composer-label">Your answer or reasoning</label>
+        <textarea id="attemptInput" class="attempt-input" rows="3" placeholder="e.g. I think it's B because... (Cmd/Ctrl+Enter to send)"></textarea>
+        <div class="composer-actions">
+          <button id="btnHint" class="secondary-btn">💡 Hint</button>
+          <button id="btnCheckAttempt" class="primary-btn" disabled>Check my answer</button>
+          <button id="btnCancel" class="secondary-btn hidden">Cancel</button>
+        </div>
+        <button id="btnSolution" class="link-btn" disabled>🔒 Full solution unlocks after your first attempt</button>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="panel-footer">
+      <div class="shortcut-tip">
+        <span><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> for a hint</span>
+      </div>
+      <div class="progress-stats" id="progressStats"></div>
+    </footer>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

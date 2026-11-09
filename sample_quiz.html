@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Question Helper - Interactive Quiz Test Suite</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .quiz-container {
+      width: 100%;
+      max-width: 680px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+    }
+    .quiz-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .quiz-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .question-badge {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(99, 102, 241, 0.15);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .progress-bar-wrap {
+      width: 100%;
+      height: 4px;
+      background: var(--border);
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.3s ease;
+    }
+    .question-card {
+      padding: 28px 24px;
+    }
+    .question-text {
+      font-size: 16.5px;
+      font-weight: 600;
+      line-height: 1.5;
+      margin-bottom: 20px;
+      color: var(--text);
+    }
+    .question-text pre {
+      background: #0b0f19;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 14px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13.5px;
+      overflow-x: auto;
+      color: #38bdf8;
+    }
+    .question-text code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .canvas-container {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 20px;
+      background: #0b0f19;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .options-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .choice-label {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 14.5px;
+    }
+    .choice-label:hover {
+      background: rgba(99, 102, 241, 0.08);
+      border-color: var(--accent);
+    }
+    .choice-label input[type="radio"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .quiz-footer {
+      padding: 18px 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.15);
+    }
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s ease;
+    }
+    .btn-prev {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .btn-prev:hover:not(:disabled) {
+      color: var(--text);
+      border-color: var(--muted);
+    }
+    .btn-prev:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-next {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-next:hover {
+      background: var(--accent-hover);
+    }
+    .info-box {
+      max-width: 680px;
+      margin-top: 24px;
+      padding: 16px 20px;
+      background: rgba(99, 102, 241, 0.08);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      border-radius: 12px;
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .info-box strong { color: var(--text); }
+  </style>
+</head>
+<body>
+
+  <div class="quiz-container">
+    <div class="quiz-header">
+      <span class="quiz-title">Sample Practice Set</span>
+      <span class="question-badge" id="questionBadge">Question 1 of 4</span>
+    </div>
+
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progressBar" style="width: 25%;"></div>
+    </div>
+
+    <!-- Active Question Container (Observed by MutationObserver) -->
+    <div class="question-card" id="questionCard">
+      <h2 class="question-text" id="questionStem"></h2>
+      
+      <div id="visualMediaContainer" class="canvas-container hidden">
+        <canvas id="quizCanvas" width="360" height="200"></canvas>
+      </div>
+
+      <div class="options-group" id="optionsGroup" role="radiogroup"></div>
+    </div>
+
+    <div class="quiz-footer">
+      <button class="btn btn-prev" id="btnPrev" disabled>&larr; Previous</button>
+      <button class="btn" id="btnReloadPart" style="background: rgba(255,255,255,0.06); color: var(--text); border: 1px solid var(--border); font-size: 13px;">Save Part (Reload Page) ↻</button>
+      <button class="btn btn-next" id="btnNext">Next Question &rarr;</button>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <strong>Testing Guide:</strong> Open Chrome's Side Panel (click Question Helper icon or press <kbd>Alt+Shift+Q</kbd>). As you click <strong>Next Question</strong>, notice the side panel picks up the new question within ~400ms. Ask for a hint, type an attempt, and go back to a previous question to see its conversation restored. Question 4 tests the screenshot / vision fallback.
+  </div>
+
+  <script src="sample_quiz.js"></script>
+</body>
+</html>
