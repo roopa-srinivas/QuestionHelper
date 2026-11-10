@@ -1,6 +1,6 @@
 /**
  * Question Helper - Settings / Options Page Stylesheet
- * Native dark and light mode, card-based layout
+ * Light theme, card-based layout
  */
 
 :root {
@@ -29,30 +29,9 @@
   --radius-lg: 14px;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-page: #0b0f19;
-    --bg-card: #151d2e;
-    --bg-input: #1e293b;
-    --border-color: #273549;
-    --border-focus: #818cf8;
-    
-    --text-primary: #f8fafc;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    
-    --accent-primary: #6366f1;
-    --accent-hover: #818cf8;
-    --accent-light: rgba(99, 102, 241, 0.15);
-    
-    --success: #34d399;
-    --success-bg: rgba(16, 185, 129, 0.15);
-    --error: #f87171;
-    --error-bg: rgba(239, 68, 68, 0.15);
-    --danger: #ef4444;
-  }
+  /* Always light, whatever the system theme; keeps file pickers and checkboxes light too */
+  color-scheme: light;
 }
 
 * {

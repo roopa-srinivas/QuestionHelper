@@ -35,7 +35,7 @@ Each question keeps its own conversation. If you move to the next question and c
 - **Site-Specific CSS Selectors**: Configure custom question container selectors per hostname in Settings.
 - **Survives Idle**: Conversations are kept in `chrome.storage.session`, so they aren't lost when Chrome suspends the background service worker. They are cleared when the browser closes.
 - **Privacy**: API keys are stored only in `chrome.storage.local`. They are never logged, synced, or sent anywhere except the provider's own API.
-- **Light & Dark Mode**: Follows your browser theme.
+- **Light Theme**: The side panel and Settings page always use a light theme, whatever your system or browser theme.
 
 ---
 
@@ -132,7 +132,7 @@ QuestionHelper/
 ├── background.js         # Service worker: tutoring sessions, Gemini/Claude streaming, tab capture
 ├── content.js            # Content script: question extraction & debounced MutationObserver
 ├── sidepanel.html        # Side panel layout
-├── sidepanel.css         # Dark & light theme styles for the side panel
+├── sidepanel.css         # Light theme styles for the side panel
 ├── sidepanel.js          # Side panel UI: conversation, hint/attempt/solution controls, markdown renderer
 ├── options.html          # Options / settings page
 ├── options.css           # Options page styling
