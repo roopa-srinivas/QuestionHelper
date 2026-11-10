@@ -1,7 +1,7 @@
 /**
  * Question Helper - Side Panel Script
  * Renders the detected question and the tutoring conversation, streams tutor replies
- * from the background worker, and sends hint / attempt / solution requests.
+ * from the background worker, and sends step / attempt requests.
  */
 
 // DOM Elements
@@ -40,10 +40,13 @@ const btnResetConversation = document.getElementById('btnResetConversation');
 const answerCardContent = document.getElementById('answerCardContent');
 
 const attemptInput = document.getElementById('attemptInput');
-const btnHint = document.getElementById('btnHint');
+const btnNextStep = document.getElementById('btnNextStep');
 const btnCheckAttempt = document.getElementById('btnCheckAttempt');
 const btnCancel = document.getElementById('btnCancel');
-const btnSolution = document.getElementById('btnSolution');
+const stepProgress = document.getElementById('stepProgress');
+const stepCaption = document.getElementById('stepCaption');
+
+const TOTAL_STEPS = 3;
 const progressStats = document.getElementById('progressStats');
 
 // State
@@ -184,28 +187,35 @@ function updateStatusUI(state) {
   const questionReady = hasQuestion(state.question);
   const turns = state.turns || [];
   const attempts = turns.filter(t => t.kind === 'attempt').length;
-  const hints = turns.filter(t => t.kind === 'hint').length;
-  const solutionShown = turns.some(t => t.kind === 'solution');
+  // Count only steps that got a reply (an in-flight request is still "thinking")
+  const steps = turns.filter((t, i) => t.role === 'student' && t.kind === 'step' && turns[i + 1]?.role === 'tutor').length;
+  const allStepsShown = steps >= TOTAL_STEPS;
 
-  btnHint.disabled = busy || !questionReady;
-  btnHint.textContent = hints === 0 ? '💡 Hint' : '💡 Next hint';
+  btnNextStep.disabled = busy || !questionReady || allStepsShown;
+  if (allStepsShown) {
+    btnNextStep.textContent = '✓ Answer shown';
+  } else if (steps === TOTAL_STEPS - 1) {
+    btnNextStep.textContent = `👣 Step ${TOTAL_STEPS}: Answer`;
+  } else {
+    btnNextStep.textContent = `👣 Step ${steps + 1}`;
+  }
   btnCheckAttempt.disabled = busy || !questionReady || !attemptInput.value.trim();
   btnCheckAttempt.classList.toggle('hidden', busy);
   btnCancel.classList.toggle('hidden', !busy);
 
-  btnSolution.disabled = busy || attempts === 0 || solutionShown;
-  if (solutionShown) {
-    btnSolution.textContent = '✓ Full solution shown above';
-  } else if (attempts === 0) {
-    btnSolution.textContent = '🔒 Full solution unlocks after your first attempt';
-  } else {
-    btnSolution.textContent = '📖 Show the full worked solution';
-  }
+  stepProgress.querySelectorAll('.step-segments span').forEach((seg, i) => {
+    seg.classList.toggle('done', i < steps);
+  });
+  stepCaption.textContent = steps === 0
+    ? `${TOTAL_STEPS} steps · step ${TOTAL_STEPS} is the answer`
+    : allStepsShown
+      ? 'All steps shown'
+      : `Step ${steps} of ${TOTAL_STEPS}${steps === TOTAL_STEPS - 1 ? ' · next is the answer' : ''}`;
 
   btnResetConversation.classList.toggle('hidden', turns.length === 0);
 
   const stats = [];
-  if (hints) stats.push(`${hints} hint${hints === 1 ? '' : 's'}`);
+  if (steps) stats.push(`${steps}/${TOTAL_STEPS} steps`);
   if (attempts) stats.push(`${attempts} attempt${attempts === 1 ? '' : 's'}`);
   progressStats.textContent = stats.join(' · ');
 }
@@ -299,10 +309,13 @@ function updateQuestionUI(question) {
   }
 }
 
-const STUDENT_ACTION_LABELS = {
-  hint: '💡 Asked for a hint',
-  solution: '📖 Asked for the full solution'
-};
+function studentActionLabel(turn) {
+  if (turn.kind === 'step') {
+    return turn.step >= TOTAL_STEPS ? `👣 Asked for step ${turn.step}: the answer` : `👣 Asked for step ${turn.step}`;
+  }
+  // Conversations saved before steps existed
+  return { hint: '💡 Asked for a hint', solution: '📖 Asked for the full solution' }[turn.kind] || '';
+}
 
 function createBubble(turn) {
   const bubble = document.createElement('div');
@@ -312,7 +325,7 @@ function createBubble(turn) {
       bubble.textContent = turn.text;
     } else {
       bubble.className = 'bubble student-action';
-      bubble.textContent = STUDENT_ACTION_LABELS[turn.kind] || '';
+      bubble.textContent = studentActionLabel(turn);
     }
   } else {
     bubble.className = 'bubble tutor markdown-body';
@@ -340,7 +353,7 @@ function renderConversation(state) {
   emptyAnswerState.classList.toggle('hidden', !isEmpty || isBusy(state));
 
   if (hasQuestion(state.question)) {
-    emptyAnswerDesc.innerHTML = 'Ask for a <strong>hint</strong>, or type your answer below and the tutor will tell you if you\'re on the right track.';
+    emptyAnswerDesc.innerHTML = 'Go one <strong>step</strong> at a time (step 3 is the answer), or type your answer below and the tutor will tell you if you\'re on the right track.';
   } else {
     emptyAnswerDesc.innerHTML = 'Open a practice question on your active tab, or use <strong>Capture Tab</strong> / upload an image.';
   }
@@ -433,8 +446,8 @@ function rereadActiveTab() {
 
 // --- Event Listeners ---
 
-btnHint.addEventListener('click', () => {
-  safeSendMessage({ type: 'TUTOR_HINT' });
+btnNextStep.addEventListener('click', () => {
+  safeSendMessage({ type: 'TUTOR_NEXT_STEP' });
 });
 
 btnCheckAttempt.addEventListener('click', submitAttempt);
@@ -448,10 +461,6 @@ attemptInput.addEventListener('keydown', (e) => {
 
 attemptInput.addEventListener('input', () => {
   if (currentState) updateStatusUI(currentState);
-});
-
-btnSolution.addEventListener('click', () => {
-  safeSendMessage({ type: 'TUTOR_SOLUTION' });
 });
 
 btnCancel.addEventListener('click', () => {

@@ -1,8 +1,8 @@
 # Question Helper (Chrome Extension - Manifest V3)
 
-**Question Helper** is an AI study tutor that lives in the Chrome Side Panel (`chrome.sidePanel` API). When you're working through practice problems, it reads the question on your active tab and coaches you toward the answer: hints that get more specific each time, feedback on your own attempts, and a full worked solution once you've tried it yourself. It works with **Google Gemini** (free API key from Google AI Studio) or **Anthropic Claude**.
+**Question Helper** is an AI study tutor that lives in the Chrome Side Panel (`chrome.sidePanel` API). When you're working through practice problems, it reads the question on your active tab and walks you to the answer in three steps, one click at a time, with feedback on your own attempts along the way. It works with **Google Gemini** (free API key from Google AI Studio) or **Anthropic Claude**.
 
-**Status:** in progress. Hints, answer checking, worked solutions and course materials work today, and I'm still improving it.
+**Status:** in progress. Step-by-step help, answer checking and course materials work today, and I'm still improving it.
 
 It's built for practice and homework you're allowed to get help on. Don't use it on graded exams or anywhere outside help isn't permitted.
 
@@ -10,11 +10,13 @@ It's built for practice and homework you're allowed to get help on. Don't use it
 
 ## 🎓 How Tutoring Works
 
-1. **💡 Hint**: The first hint names the concept the question is testing and asks a guiding question. Each **Next hint** gets more specific (the relevant formula or definition, how to set up the first step, which options can be ruled out) but never gives away the final answer.
-2. **Check my answer**: Type your answer and/or reasoning. The tutor tells you whether you're on track. If you're wrong, it points to the step or misconception that went off course without revealing the answer. If you're right, it confirms and explains why.
-3. **📖 Full solution**: Unlocks after your first attempt. You get a step-by-step worked solution, a key takeaway, and the most common mistake.
+1. **👣 Step 1 → Step 2 → Step 3: Answer**: One click per step, and each builds on the last.
+   - **Step 1** names the concept the question tests and the first move: what to identify, set up or recall.
+   - **Step 2** works through the main reasoning (and rules out wrong choices), stopping one move short of the answer.
+   - **Step 3** finishes it: the final answer, a key takeaway, and the most common mistake.
+2. **Check my answer**: At any point, type your answer and/or reasoning. The tutor tells you whether you're on track. If you're wrong, it points to the step or misconception that went off course without revealing the answer (unless you've already reached step 3).
 
-Each question keeps its own conversation. If you move to the next question and come back, your hints and attempts are still there. Use the ↺ button on the tutor card to start a question over.
+Each question keeps its own conversation. If you move to the next question and come back, your steps and attempts are still there. Use the ↺ button on the tutor card to start a question over.
 
 ---
 
@@ -78,7 +80,7 @@ If you already had an earlier version loaded, click the reload icon on its card 
 *(Or switch to Anthropic Claude in Settings if you prefer using Claude.)*
 
 ### 3. Optional: Tutor Preferences
-Under **Tutor Preferences** in Settings you can add extra instructions, such as your course level, the notation you use, or how detailed you want hints to be. These are added to the tutor's built-in instructions.
+Under **Tutor Preferences** in Settings you can add extra instructions, such as your course level, the notation you use, or how detailed you want each step to be. These are added to the tutor's built-in instructions.
 
 ---
 
@@ -89,12 +91,12 @@ Under **Tutor Preferences** in Settings you can add extra instructions, such as 
 1. Open `sample_quiz.html` in Chrome (drag it into a tab, or press `Cmd+O` / `Ctrl+O`).
 2. Open the side panel: click the **Question Helper** icon, or press `Alt + Shift + Q`.
 3. **Question 1 (QuickSort time complexity)**: the question and choices appear in the panel.
-   - Click **💡 Hint**. The tutor names the concept and asks a guiding question, without giving the answer.
+   - Click **👣 Step 1**. The tutor names the concept and the first move, without giving the answer.
    - Type a wrong answer (e.g. "A, because it's always n log n") and click **Check my answer**. The tutor explains what's off without revealing the right choice.
-   - Click **📖 Show the full worked solution**, which unlocked after your attempt.
+   - Click **👣 Step 2**, then **👣 Step 3: Answer** for the worked answer.
 4. **Question detection**: click **Next Question →**. Within ~400ms the panel switches to Question 2 with a fresh conversation.
 5. **Restored conversations**: click **← Previous**. Your Question 1 conversation is still there.
-6. **Vision (Question 4)**: Question 4 draws a right triangle on an HTML5 `<canvas>`. Ask for a hint and the tutor gets a screenshot of the diagram automatically, or click **Capture Tab** (camera icon) to use the screenshot as the question.
+6. **Vision (Question 4)**: Question 4 draws a right triangle on an HTML5 `<canvas>`. Ask for step 1 and the tutor gets a screenshot of the diagram automatically, or click **Capture Tab** (camera icon) to use the screenshot as the question.
 
 ---
 
@@ -103,7 +105,7 @@ Under **Tutor Preferences** in Settings you can add extra instructions, such as 
 | Shortcut | Action |
 | :--- | :--- |
 | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>Q</kbd> | Toggle the Question Helper side panel |
-| <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> | Get a hint for the current question |
+| <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> | Get the next step for the current question |
 | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> | Send your answer (in the answer box) |
 
 *To change keyboard shortcuts, navigate to `chrome://extensions/shortcuts` in Chrome.*
@@ -150,7 +152,7 @@ QuestionHelper/
 ├── content.js            # Content script: question extraction & debounced MutationObserver
 ├── sidepanel.html        # Side panel layout
 ├── sidepanel.css         # Light theme styles for the side panel
-├── sidepanel.js          # Side panel UI: conversation, hint/attempt/solution controls, markdown renderer
+├── sidepanel.js          # Side panel UI: conversation, step/attempt controls, markdown renderer
 ├── options.html          # Options / settings page
 ├── options.css           # Options page styling
 ├── options.js            # Settings controller (API keys, models, tutor preferences, site selectors)

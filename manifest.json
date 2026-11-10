@@ -58,7 +58,7 @@
         "default": "Alt+Shift+R",
         "mac": "Alt+Shift+R"
       },
-      "description": "Get a hint for the current question"
+      "description": "Get the next step for the current question"
     }
   },
   "icons": {
