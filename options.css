@@ -1,6 +1,6 @@
 /**
  * Question Helper - Settings / Options Page Stylesheet
- * Native dark and light mode, card-based layout
+ * Light theme, card-based layout
  */
 
 :root {
@@ -29,30 +29,9 @@
   --radius-lg: 14px;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-page: #0b0f19;
-    --bg-card: #151d2e;
-    --bg-input: #1e293b;
-    --border-color: #273549;
-    --border-focus: #818cf8;
-    
-    --text-primary: #f8fafc;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    
-    --accent-primary: #6366f1;
-    --accent-hover: #818cf8;
-    --accent-light: rgba(99, 102, 241, 0.15);
-    
-    --success: #34d399;
-    --success-bg: rgba(16, 185, 129, 0.15);
-    --error: #f87171;
-    --error-bg: rgba(239, 68, 68, 0.15);
-    --danger: #ef4444;
-  }
+  /* Always light, whatever the system theme; keeps file pickers and checkboxes light too */
+  color-scheme: light;
 }
 
 * {
@@ -577,6 +556,72 @@ textarea {
 
 .btn-delete-rule:hover {
   background-color: var(--error-bg);
+}
+
+/* Course Materials */
+input[type="file"] {
+  width: 100%;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 0;
+}
+
+.materials-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.materials-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.materials-course h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.material-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+}
+
+.material-row .material-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.material-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .selector-inputs,
+  .material-row {
+    flex-wrap: wrap;
+  }
+  .material-row .material-title {
+    flex-basis: 100%;
+  }
 }
 
 /* Cache Section */

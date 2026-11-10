@@ -1,7 +1,8 @@
 /**
  * Question Helper - Side Panel Script
  * Renders the detected question and the tutoring conversation, streams tutor replies
- * from the background worker, and sends hint / attempt / solution requests.
+ * from the background worker, and sends step / attempt requests. Also lets the student
+ * choose which question on the page to work on.
  */
 
 // DOM Elements
@@ -32,14 +33,35 @@ const emptyAnswerState = document.getElementById('emptyAnswerState');
 const emptyAnswerDesc = document.getElementById('emptyAnswerDesc');
 const conversationEl = document.getElementById('conversation');
 const modelBadge = document.getElementById('modelBadge');
+const materialsBadge = document.getElementById('materialsBadge');
+const studySummary = document.getElementById('studySummary');
+const studyList = document.getElementById('studyList');
+const btnManageMaterials = document.getElementById('btnManageMaterials');
 const btnResetConversation = document.getElementById('btnResetConversation');
 const answerCardContent = document.getElementById('answerCardContent');
 
 const attemptInput = document.getElementById('attemptInput');
-const btnHint = document.getElementById('btnHint');
+const btnNextStep = document.getElementById('btnNextStep');
 const btnCheckAttempt = document.getElementById('btnCheckAttempt');
 const btnCancel = document.getElementById('btnCancel');
-const btnSolution = document.getElementById('btnSolution');
+const stepProgress = document.getElementById('stepProgress');
+const stepCaption = document.getElementById('stepCaption');
+const btnPickQuestion = document.getElementById('btnPickQuestion');
+const btnUnpin = document.getElementById('btnUnpin');
+const btnUseSelection = document.getElementById('btnUseSelection');
+const btnErrorAction = document.getElementById('btnErrorAction');
+const btnPasteQuestion = document.getElementById('btnPasteQuestion');
+const pasteBox = document.getElementById('pasteBox');
+const pasteInput = document.getElementById('pasteInput');
+const pasteImagesEl = document.getElementById('pasteImages');
+const btnUsePaste = document.getElementById('btnUsePaste');
+const btnCancelPaste = document.getElementById('btnCancelPaste');
+
+const MAX_PASTED_IMAGES = 8;
+let pastedImages = []; // { dataUrl } for pasted files, { src } for images in pasted web content
+
+const TOTAL_STEPS = 3;
+let picking = false;
 const progressStats = document.getElementById('progressStats');
 
 // State
@@ -171,37 +193,46 @@ function updateStatusUI(state) {
   thinkingState.classList.toggle('hidden', state.status !== 'thinking');
 
   if (state.error) {
+    panelErrorActive = false;
+    btnErrorAction.classList.add('hidden');
     errorMessage.textContent = state.error;
     errorBanner.classList.remove('hidden');
-  } else {
+  } else if (!panelErrorActive) {
     errorBanner.classList.add('hidden');
   }
 
   const questionReady = hasQuestion(state.question);
   const turns = state.turns || [];
   const attempts = turns.filter(t => t.kind === 'attempt').length;
-  const hints = turns.filter(t => t.kind === 'hint').length;
-  const solutionShown = turns.some(t => t.kind === 'solution');
+  // Count only steps that got a reply (an in-flight request is still "thinking")
+  const steps = turns.filter((t, i) => t.role === 'student' && t.kind === 'step' && turns[i + 1]?.role === 'tutor').length;
+  const allStepsShown = steps >= TOTAL_STEPS;
 
-  btnHint.disabled = busy || !questionReady;
-  btnHint.textContent = hints === 0 ? '💡 Hint' : '💡 Next hint';
+  btnNextStep.disabled = busy || !questionReady || allStepsShown;
+  if (allStepsShown) {
+    btnNextStep.textContent = '✓ Answer shown';
+  } else if (steps === TOTAL_STEPS - 1) {
+    btnNextStep.textContent = `👣 Step ${TOTAL_STEPS}: Answer`;
+  } else {
+    btnNextStep.textContent = `👣 Step ${steps + 1}`;
+  }
   btnCheckAttempt.disabled = busy || !questionReady || !attemptInput.value.trim();
   btnCheckAttempt.classList.toggle('hidden', busy);
   btnCancel.classList.toggle('hidden', !busy);
 
-  btnSolution.disabled = busy || attempts === 0 || solutionShown;
-  if (solutionShown) {
-    btnSolution.textContent = '✓ Full solution shown above';
-  } else if (attempts === 0) {
-    btnSolution.textContent = '🔒 Full solution unlocks after your first attempt';
-  } else {
-    btnSolution.textContent = '📖 Show the full worked solution';
-  }
+  stepProgress.querySelectorAll('.step-segments span').forEach((seg, i) => {
+    seg.classList.toggle('done', i < steps);
+  });
+  stepCaption.textContent = steps === 0
+    ? `${TOTAL_STEPS} steps · step ${TOTAL_STEPS} is the answer`
+    : allStepsShown
+      ? 'All steps shown'
+      : `Step ${steps} of ${TOTAL_STEPS}${steps === TOTAL_STEPS - 1 ? ' · next is the answer' : ''}`;
 
   btnResetConversation.classList.toggle('hidden', turns.length === 0);
 
   const stats = [];
-  if (hints) stats.push(`${hints} hint${hints === 1 ? '' : 's'}`);
+  if (steps) stats.push(`${steps}/${TOTAL_STEPS} steps`);
   if (attempts) stats.push(`${attempts} attempt${attempts === 1 ? '' : 's'}`);
   progressStats.textContent = stats.join(' · ');
 }
@@ -210,6 +241,8 @@ function updateStatusUI(state) {
  * Update Question Card
  */
 function updateQuestionUI(question) {
+  btnUnpin.classList.toggle('hidden', !question?.picked);
+  btnUnpin.textContent = { 'Your selection': '📌 Your selection ✕', 'Pasted by you': '📌 Pasted ✕' }[question?.selectorUsed] || '📌 Your pick ✕';
   if (!hasQuestion(question)) {
     emptyQuestionState.classList.remove('hidden');
     detectedQuestionContent.classList.add('hidden');
@@ -231,8 +264,8 @@ function updateQuestionUI(question) {
     if (question.source !== 'image') questionTextEl.textContent = '(No question stem found)';
   }
 
-  // Tags
-  if (question.selectorUsed) {
+  // Tags (a picked question shows the 📌 tag instead)
+  if (question.selectorUsed && !question.picked) {
     selectorTag.textContent = question.selectorUsed.replace('Heuristic: ', '');
     selectorTag.classList.remove('hidden');
   } else {
@@ -295,10 +328,13 @@ function updateQuestionUI(question) {
   }
 }
 
-const STUDENT_ACTION_LABELS = {
-  hint: '💡 Asked for a hint',
-  solution: '📖 Asked for the full solution'
-};
+function studentActionLabel(turn) {
+  if (turn.kind === 'step') {
+    return turn.step >= TOTAL_STEPS ? `👣 Asked for step ${turn.step}: the answer` : `👣 Asked for step ${turn.step}`;
+  }
+  // Conversations saved before steps existed
+  return { hint: '💡 Asked for a hint', solution: '📖 Asked for the full solution' }[turn.kind] || '';
+}
 
 function createBubble(turn) {
   const bubble = document.createElement('div');
@@ -308,7 +344,7 @@ function createBubble(turn) {
       bubble.textContent = turn.text;
     } else {
       bubble.className = 'bubble student-action';
-      bubble.textContent = STUDENT_ACTION_LABELS[turn.kind] || '';
+      bubble.textContent = studentActionLabel(turn);
     }
   } else {
     bubble.className = 'bubble tutor markdown-body';
@@ -336,7 +372,7 @@ function renderConversation(state) {
   emptyAnswerState.classList.toggle('hidden', !isEmpty || isBusy(state));
 
   if (hasQuestion(state.question)) {
-    emptyAnswerDesc.innerHTML = 'Ask for a <strong>hint</strong>, or type your answer below and the tutor will tell you if you\'re on the right track.';
+    emptyAnswerDesc.innerHTML = 'Go one <strong>step</strong> at a time (step 3 is the answer), or type your answer below and the tutor will tell you if you\'re on the right track.';
   } else {
     emptyAnswerDesc.innerHTML = 'Open a practice question on your active tab, or use <strong>Capture Tab</strong> / upload an image.';
   }
@@ -365,6 +401,16 @@ function applyState(state) {
   thinkingText.textContent = `${providerName} is thinking...`;
   if (state.model) {
     modelBadge.textContent = state.model;
+  }
+  // Which course materials the last tutor request used
+  if (state.materialsUsed) {
+    materialsBadge.textContent = `📚 ${state.materialsUsed.label}`;
+    materialsBadge.title = state.materialsUsed.partial
+      ? `Used the ${state.materialsUsed.pagesIncluded} most relevant of ${state.materialsUsed.pagesTotal} pages`
+      : `Used all ${state.materialsUsed.pagesTotal} pages`;
+    materialsBadge.classList.remove('hidden');
+  } else {
+    materialsBadge.classList.add('hidden');
   }
 
   updateStatusUI(state);
@@ -417,10 +463,253 @@ function rereadActiveTab() {
   });
 }
 
+// --- Choosing a question on the page ---
+
+function sendToActiveTab(msg, callback) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) return callback && callback(false);
+    try {
+      chrome.tabs.sendMessage(tabs[0].id, msg, (response) => {
+        const ok = !chrome.runtime.lastError;
+        if (callback) callback(ok, response);
+      });
+    } catch (_) {
+      if (callback) callback(false);
+    }
+  });
+}
+
+const PAGE_UNREACHABLE = "Can't read this page. If you just installed or reloaded Question Helper, refresh the page and try again.";
+
+// The background finds the frame holding the selection (quizzes are often in embedded frames)
+btnUseSelection.addEventListener('click', () => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) return showPanelError(`${PAGE_UNREACHABLE} Or click 📋 and paste the question in.`);
+    btnUseSelection.disabled = true;
+    safeSendMessage({ type: 'USE_SELECTION_IN_TAB', tabId: tabs[0].id }, async (res) => {
+      btnUseSelection.disabled = false;
+      if (res && res.ok) {
+        clearPanelError();
+        if (!pasteBox.classList.contains('hidden')) closePasteBox();
+        return;
+      }
+      const reason = res?.error || "Couldn't read your selection.";
+      if (res?.canUseClipboard) {
+        await offerCopiedText(reason);
+      } else {
+        showPanelError(`${reason} Click 📋 to paste the question in.`);
+      }
+    });
+  });
+});
+
+const COPY_KEYS = /Mac/i.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C';
+
+/**
+ * T couldn't see the selection on the page. Copying works almost everywhere (PDFs, Google Docs, protected
+ * frames), so offer what's on the clipboard, shown first so a stale copy is easy to spot.
+ */
+async function offerCopiedText(reason) {
+  let copied = '';
+  try {
+    copied = (await navigator.clipboard.readText()).trim();
+  } catch (_) {}
+  if (!copied) {
+    showPanelError(`${reason} Copy your selection with ${COPY_KEYS}, then click T again.`);
+    return;
+  }
+  const preview = copied.replace(/\s+/g, ' ').slice(0, 70);
+  showPanelError(
+    `${reason} You can use the text you copied instead. If it's not the question, copy the question with ${COPY_KEYS} and click T again.`,
+    {
+      label: `Use copied text: “${preview}${copied.length > 70 ? '…' : ''}”`,
+      title: copied.slice(0, 500),
+      onClick: () => {
+        safeSendMessage({ type: 'USE_PASTED_QUESTION', text: copied, images: [], asSelection: true }, (r) => {
+          if (r && r.ok) clearPanelError();
+          else showPanelError("Couldn't use the copied text. Click 📋 to paste it in.");
+        });
+      }
+    }
+  );
+}
+
+// --- Paste the question yourself (fallback) ---
+
+function renderPastedImages() {
+  pasteImagesEl.textContent = '';
+  pastedImages.forEach((img, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'paste-thumb';
+    const el = document.createElement('img');
+    // A copied web image that can't be loaded (expired link, sign-in needed) is dropped, not shown broken
+    el.addEventListener('error', () => {
+      pastedImages = pastedImages.filter(p => p !== img);
+      renderPastedImages();
+    }, { once: true });
+    el.src = img.dataUrl || img.src;
+    el.alt = `Pasted image ${idx + 1}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.title = 'Remove this image';
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      pastedImages.splice(idx, 1);
+      renderPastedImages();
+    });
+    wrap.append(el, remove);
+    pasteImagesEl.appendChild(wrap);
+  });
+  pasteImagesEl.classList.toggle('hidden', pastedImages.length === 0);
+  updatePasteButton();
+}
+
+function updatePasteButton() {
+  btnUsePaste.disabled = !pasteInput.value.trim() && pastedImages.length === 0;
+}
+
+function openPasteBox() {
+  // Editing a question that was pasted earlier starts from what was pasted
+  if (!pasteInput.value && currentState?.question?.source === 'pasted') {
+    pasteInput.value = currentState.question.questionText || '';
+  }
+  pasteBox.classList.remove('hidden');
+  updatePasteButton();
+  pasteInput.focus();
+}
+
+function closePasteBox() {
+  pasteBox.classList.add('hidden');
+  pasteInput.value = '';
+  pastedImages = [];
+  renderPastedImages();
+}
+
+function addPastedImage(img) {
+  if (pastedImages.length >= MAX_PASTED_IMAGES) return;
+  const key = img.dataUrl || img.src;
+  if (pastedImages.some(p => (p.dataUrl || p.src) === key)) return;
+  pastedImages.push(img);
+  renderPastedImages();
+}
+
+btnPasteQuestion.addEventListener('click', () => {
+  if (pasteBox.classList.contains('hidden')) openPasteBox();
+  else closePasteBox();
+});
+btnCancelPaste.addEventListener('click', closePasteBox);
+pasteInput.addEventListener('input', updatePasteButton);
+pasteInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !btnUsePaste.disabled) {
+    e.preventDefault();
+    btnUsePaste.click();
+  }
+});
+
+// Text pastes into the box as usual; pasted screenshots/files and images in copied web content are attached
+pasteInput.addEventListener('paste', (e) => {
+  const data = e.clipboardData;
+  if (!data) return;
+  for (const item of data.items || []) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = () => addPastedImage({ dataUrl: reader.result });
+      reader.readAsDataURL(file);
+    }
+  }
+  const html = data.getData('text/html');
+  if (html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('img[src]').forEach(img => {
+      const src = img.getAttribute('src');
+      if (/^data:image\//.test(src)) addPastedImage({ dataUrl: src });
+      else if (/^https?:\/\//.test(src)) addPastedImage({ src });
+    });
+  }
+  // A pasted image with no text: don't insert the file name as text
+  if (!data.getData('text/plain') && Array.from(data.items || []).some(i => i.kind === 'file')) {
+    e.preventDefault();
+  }
+});
+
+btnUsePaste.addEventListener('click', () => {
+  const text = pasteInput.value.trim();
+  const images = pastedImages.map((img) => {
+    if (img.dataUrl) {
+      const mimeMatch = img.dataUrl.match(/^data:([^;]+);/);
+      return { mimeType: mimeMatch ? mimeMatch[1] : 'image/png', data: img.dataUrl.split(',')[1], type: 'paste', description: 'Pasted image' };
+    }
+    return { src: img.src, mimeType: 'image/jpeg', type: 'image_url', description: 'Pasted image' };
+  });
+  if (!text && images.length === 0) return;
+  safeSendMessage({ type: 'USE_PASTED_QUESTION', text, images }, (res) => {
+    if (res && res.ok) {
+      closePasteBox();
+      clearPanelError();
+    } else {
+      showPanelError("Couldn't use the pasted question. Try again.");
+    }
+  });
+});
+
+// An error raised by the side panel itself (not the background), optionally with one action button.
+// It stays up until dismissed or replaced, even as the background sends state updates.
+let panelErrorActive = false;
+
+function showPanelError(text, action = null) {
+  panelErrorActive = true;
+  errorMessage.textContent = text;
+  errorBanner.classList.remove('hidden');
+  if (action) {
+    btnErrorAction.textContent = action.label;
+    btnErrorAction.title = action.title || action.label;
+    btnErrorAction.onclick = action.onClick;
+    btnErrorAction.classList.remove('hidden');
+  } else {
+    btnErrorAction.onclick = null;
+    btnErrorAction.classList.add('hidden');
+  }
+}
+
+function clearPanelError() {
+  panelErrorActive = false;
+  btnErrorAction.onclick = null;
+  btnErrorAction.classList.add('hidden');
+  errorBanner.classList.add('hidden');
+}
+
+function setPicking(on) {
+  picking = on;
+  btnPickQuestion.classList.toggle('active', on);
+  btnPickQuestion.title = on ? 'Cancel choosing a question' : 'Choose a question on the page';
+}
+
+btnPickQuestion.addEventListener('click', () => {
+  if (picking) {
+    sendToActiveTab({ type: 'CANCEL_PICKER' });
+    setPicking(false);
+    return;
+  }
+  sendToActiveTab({ type: 'START_PICKER' }, (ok) => {
+    if (ok) {
+      setPicking(true);
+    } else {
+      showPanelError(PAGE_UNREACHABLE);
+    }
+  });
+});
+
+btnUnpin.addEventListener('click', () => {
+  safeSendMessage({ type: 'CLEAR_PICK' });
+  sendToActiveTab({ type: 'UNPIN_QUESTION' });
+});
+
 // --- Event Listeners ---
 
-btnHint.addEventListener('click', () => {
-  safeSendMessage({ type: 'TUTOR_HINT' });
+btnNextStep.addEventListener('click', () => {
+  safeSendMessage({ type: 'TUTOR_NEXT_STEP' });
 });
 
 btnCheckAttempt.addEventListener('click', submitAttempt);
@@ -434,10 +723,6 @@ attemptInput.addEventListener('keydown', (e) => {
 
 attemptInput.addEventListener('input', () => {
   if (currentState) updateStatusUI(currentState);
-});
-
-btnSolution.addEventListener('click', () => {
-  safeSendMessage({ type: 'TUTOR_SOLUTION' });
 });
 
 btnCancel.addEventListener('click', () => {
@@ -471,6 +756,8 @@ fileInputImage.addEventListener('change', () => {
 
 // Clipboard Paste Image Support: Cmd+V / Ctrl+V in Side Panel (text pastes into the answer box as usual)
 window.addEventListener('paste', (e) => {
+  // The paste box handles its own pastes (images there are attached to the pasted question)
+  if (e.target && e.target.closest && e.target.closest('#pasteBox')) return;
   const clipboardData = e.clipboardData || window.clipboardData;
   if (!clipboardData || !clipboardData.items) return;
 
@@ -486,17 +773,106 @@ window.addEventListener('paste', (e) => {
 });
 
 // Open Settings
-btnOptions.addEventListener('click', () => {
+function openSettings() {
   if (chrome.runtime.openOptionsPage) {
     chrome.runtime.openOptionsPage();
   } else {
     window.open(chrome.runtime.getURL('options.html'));
   }
+}
+btnOptions.addEventListener('click', openSettings);
+btnManageMaterials.addEventListener('click', openSettings);
+
+// --- Course materials picker ---
+
+function citeName(title) {
+  const match = title.match(/^(Ch\.\s*\d+)/i);
+  return match ? match[1] : title;
+}
+
+async function renderStudyPicker() {
+  const { courseMaterials = [], studyingMaterialIds = [] } =
+    await chrome.storage.local.get(['courseMaterials', 'studyingMaterialIds']);
+  const studying = new Set(studyingMaterialIds);
+
+  studyList.textContent = '';
+  if (courseMaterials.length === 0) {
+    studySummary.textContent = 'No course materials';
+    studySummary.classList.add('muted');
+    const empty = document.createElement('p');
+    empty.className = 'study-empty';
+    empty.textContent = 'Add textbook chapters or notes in Settings, and the tutor will teach from them and cite their pages.';
+    studyList.appendChild(empty);
+    return;
+  }
+
+  const courses = Array.from(new Set(courseMaterials.map(m => m.course || 'Other')));
+  for (const course of courses) {
+    const heading = document.createElement('div');
+    heading.className = 'study-course';
+    heading.textContent = course;
+    studyList.appendChild(heading);
+
+    for (const m of courseMaterials.filter(x => (x.course || 'Other') === course)) {
+      const label = document.createElement('label');
+      label.className = 'study-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.id = m.id;
+      box.checked = studying.has(m.id);
+      // Save what the checkboxes show, so quick clicks can't overwrite each other
+      box.addEventListener('change', () => {
+        const next = Array.from(studyList.querySelectorAll('input[type="checkbox"]:checked'), b => b.dataset.id);
+        chrome.storage.local.set({ studyingMaterialIds: next });
+      });
+      const text = document.createElement('span');
+      text.textContent = m.title;
+      label.append(box, text);
+      studyList.appendChild(label);
+    }
+  }
+
+  updateStudySummary(courseMaterials, studying);
+}
+
+function updateStudySummary(courseMaterials, studying) {
+  if (courseMaterials.length === 0) return;
+  const selected = courseMaterials.filter(m => studying.has(m.id));
+  if (selected.length === 0) {
+    studySummary.textContent = 'Nothing selected';
+    studySummary.classList.add('muted');
+  } else {
+    const selectedCourses = Array.from(new Set(selected.map(m => m.course || 'Other')));
+    studySummary.textContent = selectedCourses
+      .map(c => `${c} · ${selected.filter(m => (m.course || 'Other') === c).map(m => citeName(m.title)).join(', ')}`)
+      .join(' | ');
+    studySummary.classList.remove('muted');
+  }
+}
+
+// Only a selection change: update the checkboxes in place so keyboard focus stays put
+async function syncStudySelection() {
+  const { courseMaterials = [], studyingMaterialIds = [] } =
+    await chrome.storage.local.get(['courseMaterials', 'studyingMaterialIds']);
+  const studying = new Set(studyingMaterialIds);
+  studyList.querySelectorAll('input[type="checkbox"]').forEach(box => {
+    box.checked = studying.has(box.dataset.id);
+  });
+  updateStudySummary(courseMaterials, studying);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.courseMaterials) {
+    renderStudyPicker();
+  } else if (changes.studyingMaterialIds) {
+    syncStudySelection();
+  }
 });
 
 // Dismiss Error
 btnDismissError.addEventListener('click', () => {
-  errorBanner.classList.add('hidden');
+  clearPanelError();
   safeSendMessage({ type: 'DISMISS_ERROR' });
 });
 
@@ -517,7 +893,10 @@ setupExpandToggle(document.getElementById('answerCard'), document.getElementById
 
 // Listen to Background Messages
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'STATUS_CHANGE') {
+  if (message.type === 'PICKER_ENDED') {
+    setPicking(false);
+    if (message.error) showPanelError(message.error);
+  } else if (message.type === 'STATUS_CHANGE') {
     applyState(message.state);
   } else if (message.type === 'STREAM_CHUNK') {
     if (message.requestId !== currentRequestId || !currentState) return;
@@ -534,6 +913,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 // Initialize on Load
 document.addEventListener('DOMContentLoaded', () => {
+  renderStudyPicker();
   safeSendMessage({ type: 'GET_CURRENT_STATE' }, (res) => {
     if (res && res.state) {
       applyState(res.state);

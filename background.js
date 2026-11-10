@@ -1,40 +1,50 @@
 /**
  * Question Helper - Background Service Worker (Manifest V3)
- * Runs a Socratic tutoring session for the detected question: progressive hints,
- * feedback on the student's attempts, and a full worked solution only after an attempt.
+ * Runs a tutoring session for the detected question: three steps, one per click
+ * (step 3 is the worked answer), plus feedback on the student's own attempts.
  * Supports Google Gemini and Anthropic Claude with SSE streaming.
  */
 
+import { buildMaterialsContext, citeName } from './lib/course-materials.js';
+
 const TUTOR_SYSTEM_PROMPT = `You are a patient, encouraging study tutor. A student is working through a practice problem and wants to learn how to solve it themselves. Your job is to build their understanding, not to hand over answers.
 
-Each student message is tagged with what they want:
+Each student message is tagged with what they want. The student works through the problem in three steps, asking for one step at a time; each step builds on the steps (and any attempts) earlier in this conversation and never repeats them.
 
-[HINT REQUEST]
-- Give exactly one hint that builds on any hints already given in this conversation.
-- First hint: name the concept or skill the question is testing, and ask a guiding question that points toward the first step.
-- Later hints get progressively more specific: the relevant definition, formula or principle; how to set up the first step; which options can be ruled out and why.
-- Never complete the final step, and never state the final answer, the correct option letter, or the final numeric value.
+[STEP 1 OF 3]
+- Start with "**Step 1: <short title>**".
+- Name the concept or skill the question is testing and give the first move: what to identify, set up or recall (the relevant definition, formula or rule), and why it applies here. Then stop.
+- Do not go further, and do not state the final answer, the correct option letter, or the final value.
+
+[STEP 2 OF 3]
+- Start with "**Step 2: <short title>**".
+- Carry the reasoning from step 1 through the main work, stopping just before the final answer so that one move is left for the student. For multiple choice, rule out the options that can be ruled out and say why.
+- Still do not state the final answer, the correct option letter, or the final value.
+
+[STEP 3 OF 3: ANSWER]
+- Start with "**Step 3: Answer**".
+- Finish the reasoning from step 2 and give the final answer in bold (for multiple choice, the option letter and its text).
+- Then add "**Key takeaway:**" (one sentence) and "**Common mistake:**" (one sentence).
 
 [ATTEMPT]
 - If the attempt is correct: confirm it, briefly explain why it works, and name the key idea to remember.
-- If it is wrong or incomplete: say so kindly, point to the specific step or misconception that went wrong, and ask a question that helps them fix it. Do not reveal the correct answer.
+- If it is wrong or incomplete: say so kindly, point to the specific step or misconception that went wrong, and ask a question that helps them fix it. Do not reveal the correct answer unless step 3 has already been given.
 - If they gave an answer with no reasoning, you may ask them how they got it.
 
-[SOLUTION REQUEST] (only sent after the student has made at least one attempt)
-- Give a complete worked solution, step by step, ending with the final answer in bold.
-- Then add "**Key takeaway:**" (one sentence) and "**Common mistake:**" (one sentence).
-
 General rules:
-- Keep hints and feedback short, about 2-5 sentences. Only the full solution may be longer.
+- Keep steps 1 and 2 and feedback on attempts short, about 2-6 sentences. Step 3 may be longer.
 - Read the question exactly as given, including negative phrasing (NOT, EXCEPT, LEAST), units, and constraints.
 - If an image is attached, read the diagram, plot or figure carefully.
 - If the question text looks garbled or incomplete, say what you can see and ask the student to paste or screenshot the full question.
 - Use Markdown. Write math inline with $...$ and code in backticks.`;
 
+const TOTAL_STEPS = 3;
+
 const STUDENT_PROMPTS = {
-  hint: '[HINT REQUEST] Could I get a hint?',
-  attempt: (text) => `[ATTEMPT]\n${text}`,
-  solution: "[SOLUTION REQUEST] I've made my attempt. Please walk me through the full solution."
+  step: (n) => (n < TOTAL_STEPS
+    ? `[STEP ${n} OF ${TOTAL_STEPS}] Could I get step ${n}?`
+    : `[STEP ${n} OF ${TOTAL_STEPS}: ANSWER] Please finish it and give me the answer.`),
+  attempt: (text) => `[ATTEMPT]\n${text}`
 };
 
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
@@ -56,16 +66,19 @@ let latestState = emptyState();
 // Previous page questions' conversations, keyed by question fingerprint, so going back restores them
 let savedSessions = {};
 let stateLoaded = null;
+// Which tab/frame the picked (📌) question came from
+let pickedFrom = null;
 
 function emptyState(question = null, prev = null) {
   return {
     question,
-    turns: [], // { role: 'student' | 'tutor', kind: 'hint' | 'attempt' | 'solution' | 'reply', text }
+    turns: [], // { role: 'student' | 'tutor', kind: 'step' | 'attempt' | 'reply', step, text }
     streamingText: '',
     status: 'idle', // 'idle' | 'thinking' | 'streaming' | 'error'
     error: null,
     model: prev?.model || DEFAULT_GEMINI_MODEL,
     provider: prev?.provider || 'gemini',
+    materialsUsed: null, // { label, partial, pagesIncluded, pagesTotal } for the latest request
     requestId: currentRequestId
   };
 }
@@ -78,7 +91,20 @@ chrome.runtime.onInstalled.addListener(() => {
     });
   }
   chrome.storage.local.remove(['systemPrompt', 'autoAnswer', 'answerCache']);
+
+  // Right-click a selection -> work on exactly that text (with its images and formatting)
+  if (chrome.contextMenus) {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: SELECTION_MENU_ID,
+        title: 'Help with this selection',
+        contexts: ['selection']
+      });
+    });
+  }
 });
+
+const SELECTION_MENU_ID = 'qh-use-selection';
 
 /**
  * The service worker is stopped after ~30s idle, which would wipe the conversation.
@@ -362,7 +388,7 @@ function markStreaming(requestId) {
 /**
  * Stream a tutor reply from Google Gemini
  */
-async function streamGemini(apiKey, model, systemPrompt, conversation, controller, requestId, onConnected) {
+async function streamGemini(apiKey, model, systemParts, conversation, controller, requestId, onConnected) {
   const contents = conversation.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [
@@ -372,8 +398,9 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
   }));
 
   const payload = {
+    // Course materials come last and stay identical between requests, so Gemini's implicit caching can reuse them
     systemInstruction: {
-      parts: [{ text: systemPrompt }]
+      parts: systemParts.map(text => ({ text }))
     },
     contents,
     generationConfig: {
@@ -440,7 +467,9 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
 
   let accumulated = '';
   let finishReason = null;
+  let usage = null;
   await readSSE(response, (dataObj) => {
+    if (dataObj.usageMetadata) usage = dataObj.usageMetadata;
     const candidate = dataObj.candidates?.[0];
     if (candidate?.finishReason) finishReason = candidate.finishReason;
     const chunkText = (candidate?.content?.parts || [])
@@ -452,6 +481,10 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
       emitChunk(requestId, accumulated);
     }
   });
+
+  if (usage) {
+    console.log(`[QuestionHelper] ${model} usage: ${usage.promptTokenCount ?? '?'} prompt tokens (${usage.cachedContentTokenCount ?? 0} cached), ${usage.candidatesTokenCount ?? '?'} reply tokens`);
+  }
 
   if (!accumulated.trim()) {
     const err = new Error(finishReason === 'SAFETY'
@@ -467,7 +500,7 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
  * Gemini with ListModels discovery and a fallback cascade for unavailable or overloaded models.
  * Fallback only happens before a reply starts streaming; a reply is never spliced across models.
  */
-async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conversation, controller, requestId) {
+async function solveGeminiWithFallback(apiKey, primaryModel, systemParts, conversation, controller, requestId) {
   const verifiedModels = await getAvailableGeminiModels(apiKey);
 
   const fallbackChain = [
@@ -498,7 +531,7 @@ async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conve
     let streamStarted = false;
 
     try {
-      return await streamGemini(apiKey, currentModel, systemPrompt, conversation, attemptController, requestId, () => {
+      return await streamGemini(apiKey, currentModel, systemParts, conversation, attemptController, requestId, () => {
         streamStarted = true;
         clearTimeout(connectTimeout);
       });
@@ -530,7 +563,7 @@ async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conve
 /**
  * Stream a tutor reply from Anthropic Claude
  */
-async function streamAnthropic(apiKey, model, systemPrompt, conversation, controller, requestId) {
+async function streamAnthropic(apiKey, model, systemParts, conversation, controller, requestId) {
   const messages = conversation.map(msg => ({
     role: msg.role,
     content: [
@@ -552,7 +585,13 @@ async function streamAnthropic(apiKey, model, systemPrompt, conversation, contro
     model: model,
     max_tokens: 16000,
     stream: true,
-    system: systemPrompt,
+    system: systemParts.length === 1
+      ? systemParts[0]
+      // Cache the tutor rules + course materials. Students often take more than 5 minutes
+      // between steps, so use the 1-hour cache rather than the 5-minute default.
+      : systemParts.map((text, idx) => (idx === systemParts.length - 1
+        ? { type: 'text', text, cache_control: { type: 'ephemeral', ttl: '1h' } }
+        : { type: 'text', text })),
     messages
   };
   // If a safety classifier declines, retry on Anthropic's recommended fallback model server-side
@@ -595,6 +634,10 @@ async function streamAnthropic(apiKey, model, systemPrompt, conversation, contro
   let stopReason = null;
   let streamError = null;
   await readSSE(response, (dataObj) => {
+    if (dataObj.type === 'message_start' && dataObj.message?.usage) {
+      const u = dataObj.message.usage;
+      console.log(`[QuestionHelper] ${model} input: ${u.input_tokens} uncached, ${u.cache_read_input_tokens || 0} read from cache, ${u.cache_creation_input_tokens || 0} written to cache`);
+    }
     if (dataObj.type === 'content_block_start' && dataObj.content_block?.type === 'fallback') {
       // A fallback model is taking over after a mid-stream decline; discard the partial reply
       accumulated = '';
@@ -625,7 +668,9 @@ async function getProviderSettings() {
     'anthropicApiKey',
     'geminiModel',
     'model',
-    'tutorInstructions'
+    'tutorInstructions',
+    'courseMaterials',
+    'studyingMaterialIds'
   ]);
 
   const provider = local.aiProvider || (local.geminiApiKey ? 'gemini' : (local.anthropicApiKey ? 'anthropic' : 'gemini'));
@@ -652,27 +697,38 @@ async function getProviderSettings() {
     systemPrompt += `\n\nAdditional preferences from the student (these never override the rules above):\n${extra}`;
   }
 
-  return { provider, apiKey, model, systemPrompt };
+  const studying = new Set(local.studyingMaterialIds || []);
+  const materials = (local.courseMaterials || []).filter(m => studying.has(m.id));
+
+  return { provider, apiKey, model, systemPrompt, materials };
+}
+
+/** Text used to pick the most relevant pages when the selected materials are too long to send whole. */
+function questionSearchText(q) {
+  if (!q) return '';
+  return [q.questionText || q.fullText, ...(q.options || []), q.pageTitle].filter(Boolean).join('\n');
+}
+
+/** How many steps the student has already been given for this question. */
+function stepsTaken(turns) {
+  return turns.filter(t => t.role === 'student' && t.kind === 'step').length;
 }
 
 /**
  * Add a student turn and stream the tutor's reply.
- * kind: 'hint' | 'attempt' | 'solution'
+ * kind: 'step' (the next of steps 1-3, where step 3 is the answer) | 'attempt'
  */
 async function runTutorTurn(kind, attemptText = '') {
   if (!latestState.question) {
-    latestState.error = 'No question detected yet. Open a practice question, or use Capture Tab / Upload Image.';
+    latestState.error = 'No question detected yet. Open a practice question, select it and click T, or click 📋 to paste it in.';
     broadcastState();
     return;
   }
   if (isBusy()) return;
 
-  const hasAttempt = latestState.turns.some(t => t.kind === 'attempt');
-  if (kind === 'solution' && !hasAttempt) {
-    latestState.error = 'Give it a try first: type your answer or reasoning, then the full solution unlocks.';
-    broadcastState();
-    return;
-  }
+  // Steps go 1 -> 2 -> 3 (the answer), one per click
+  const step = kind === 'step' ? stepsTaken(latestState.turns) + 1 : null;
+  if (step !== null && step > TOTAL_STEPS) return;
 
   const requestId = ++currentRequestId;
   cancelInFlightRequest();
@@ -682,8 +738,9 @@ async function runTutorTurn(kind, attemptText = '') {
   const studentTurn = {
     role: 'student',
     kind,
+    step,
     text: kind === 'attempt' ? attemptText : '',
-    apiText: kind === 'attempt' ? STUDENT_PROMPTS.attempt(attemptText) : STUDENT_PROMPTS[kind]
+    apiText: kind === 'attempt' ? STUDENT_PROMPTS.attempt(attemptText) : STUDENT_PROMPTS.step(step)
   };
   latestState.turns.push(studentTurn);
   Object.assign(latestState, { status: 'thinking', error: null, streamingText: '', requestId });
@@ -713,9 +770,21 @@ async function runTutorTurn(kind, attemptText = '') {
     const images = await collectQuestionImages(latestState.question);
     const conversation = buildConversation(latestState.turns, latestState.question, images);
 
+    const materials = buildMaterialsContext(settings.materials, questionSearchText(latestState.question));
+    const systemParts = materials ? [settings.systemPrompt, materials.text] : [settings.systemPrompt];
+    latestState.materialsUsed = materials
+      ? {
+          label: materials.titles.map(citeName).join(', ') + (materials.partial ? ' (relevant pages)' : ''),
+          partial: materials.partial,
+          pagesIncluded: materials.pagesIncluded,
+          pagesTotal: materials.pagesTotal
+        }
+      : null;
+    broadcastState();
+
     const reply = settings.provider === 'gemini'
-      ? await solveGeminiWithFallback(settings.apiKey, settings.model, settings.systemPrompt, conversation, controller, requestId)
-      : await streamAnthropic(settings.apiKey, settings.model, settings.systemPrompt, conversation, controller, requestId);
+      ? await solveGeminiWithFallback(settings.apiKey, settings.model, systemParts, conversation, controller, requestId)
+      : await streamAnthropic(settings.apiKey, settings.model, systemParts, conversation, controller, requestId);
 
     if (currentRequestId !== requestId) return;
     if (controller.signal.aborted) {
@@ -854,12 +923,12 @@ function requestQuestionFromActiveTab() {
   });
 }
 
-async function startHintForCurrentQuestion() {
+async function startNextStep() {
   if (!latestState.question) {
     const question = await requestQuestionFromActiveTab();
     if (question) switchToQuestion(question);
   }
-  runTutorTurn('hint');
+  runTutorTurn('step');
 }
 
 function imageQuestion(image, label) {
@@ -874,14 +943,22 @@ function imageQuestion(image, label) {
   };
 }
 
-async function handleMessage(message, sendResponse) {
+async function handleMessage(message, sendResponse, sender = {}) {
   await ensureStateLoaded();
 
   switch (message.type) {
     case 'QUESTION_DETECTED': {
-      const qData = message.data;
-      // Keep an image/screenshot question until the student explicitly re-reads the page
-      const pinnedImageQuestion = latestState.question?.source === 'image' && !message.forced;
+      // picked: the student chose this question on the page, so it stays until they unpin it
+      const qData = { ...message.data, picked: !!message.picked };
+      const from = { tabId: sender.tab?.id, frameId: sender.frameId };
+      if (message.picked) pickedFrom = from;
+      // A picked question only gives way to its own frame (e.g. after that page navigates) or an explicit
+      // re-read; automatic detection in other frames or tabs leaves it alone
+      const pickedElsewhere = latestState.question?.picked && !message.forced && !message.picked &&
+        !(pickedFrom && pickedFrom.tabId === from.tabId && pickedFrom.frameId === from.frameId);
+      // Keep an image/screenshot question (or plain selected text from a frame, or a pasted one) until the student
+      // explicitly re-reads the page
+      const pinnedImageQuestion = (['image', 'selection-text', 'pasted'].includes(latestState.question?.source) && !message.forced) || pickedElsewhere;
       if (pinnedImageQuestion) {
         sendResponse({ received: true, preserved: true });
       } else if (isSameQuestion(qData, latestState.question)) {
@@ -896,8 +973,48 @@ async function handleMessage(message, sendResponse) {
       return;
     }
 
-    case 'TUTOR_HINT':
-      startHintForCurrentQuestion();
+    case 'USE_PASTED_QUESTION': {
+      // The student pasted the question into the side panel (the fallback when reading the page fails)
+      const text = (message.text || '').trim();
+      const images = (message.images || []).slice(0, 8);
+      if (!text && images.length === 0) {
+        sendResponse({ ok: false });
+        return;
+      }
+      pickedFrom = null;
+      switchToQuestion({
+        questionText: text,
+        options: [],
+        optionsText: '',
+        fullText: text || '[Pasted image question]',
+        images,
+        hasVisualMedia: images.length > 0,
+        source: 'pasted',
+        selectorUsed: message.asSelection ? 'Your selection' : 'Pasted by you',
+        picked: true
+      });
+      sendResponse({ ok: true });
+      return;
+    }
+
+    case 'USE_SELECTION_IN_TAB': {
+      const res = await useSelectionInTab(message.tabId);
+      sendResponse(res);
+      return;
+    }
+
+    case 'CLEAR_PICK':
+      // The student unpinned: automatic detection takes over again
+      pickedFrom = null;
+      if (latestState.question?.picked) {
+        latestState.question = { ...latestState.question, picked: false };
+        broadcastState();
+      }
+      sendResponse({ status: 'ok' });
+      return;
+
+    case 'TUTOR_NEXT_STEP':
+      startNextStep();
       sendResponse({ status: 'started' });
       return;
 
@@ -907,11 +1024,6 @@ async function handleMessage(message, sendResponse) {
       sendResponse({ status: text ? 'started' : 'empty' });
       return;
     }
-
-    case 'TUTOR_SOLUTION':
-      runTutorTurn('solution');
-      sendResponse({ status: 'started' });
-      return;
 
     case 'TUTOR_RESET':
       resetConversation();
@@ -962,7 +1074,7 @@ async function handleMessage(message, sendResponse) {
 
     case 'NO_QUESTION_FOUND':
       if (latestState.question?.source !== 'image' && !isBusy()) {
-        latestState.error = 'No question found on this page. Try Capture Tab, upload an image, or add a CSS selector in Settings.';
+        latestState.error = 'No question found on this page. Select the question and click T, or click 📋 to paste it in.';
         broadcastState();
       }
       sendResponse({ received: true });
@@ -975,7 +1087,7 @@ async function handleMessage(message, sendResponse) {
 
 // --- Message Router ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message, sendResponse).catch((err) => {
+  handleMessage(message, sendResponse, sender).catch((err) => {
     console.warn('[QuestionHelper] Message handling error:', err);
     sendResponse({ error: err.message });
   });
@@ -992,6 +1104,198 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   }
   if (command === 'get_hint') {
     await ensureStateLoaded();
-    startHintForCurrentQuestion();
+    startNextStep();
   }
 });
+
+/** A question made from plain selected text, when the page script can't read the selection itself. */
+function selectionTextQuestion(text) {
+  return {
+    questionText: text.trim(),
+    options: [],
+    fullText: text.trim(),
+    images: [],
+    source: 'selection-text',
+    selectorUsed: 'Your selection',
+    picked: true
+  };
+}
+
+/** Ask one frame's page script to use its selection. Resolves { unreachable: true } if no script answers. */
+function askFrameForSelection(tabId, frameId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: 'USE_SELECTION' }, { frameId }, (res) => {
+        resolve(chrome.runtime.lastError || !res ? { unreachable: true } : res);
+      });
+    } catch (_) {
+      resolve({ unreachable: true });
+    }
+  });
+}
+
+/**
+ * Read the selected text straight out of every frame in the tab. This needs no page script, so it works
+ * on pages opened before the extension was (re)loaded too. Frames the extension can't be injected into
+ * directly (about:blank, srcdoc and sandboxed same-origin frames) are read from their parent page.
+ * Throws if Chrome won't let extensions run on the page at all (its PDF viewer, chrome:// pages,
+ * the Web Store, local files without file access).
+ */
+async function readSelectedTextInFrames(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => {
+      const read = (doc) => {
+        const el = doc.activeElement;
+        try {
+          if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') && el.selectionEnd > el.selectionStart) {
+            return el.value.slice(el.selectionStart, el.selectionEnd);
+          }
+        } catch (_) {}
+        const sel = doc.getSelection ? doc.getSelection() : null;
+        return sel ? sel.toString() : '';
+      };
+      const texts = [];
+      const own = read(document);
+      if (own.trim()) texts.push(own);
+      const walk = (doc, depth) => {
+        if (depth > 4) return;
+        doc.querySelectorAll('iframe, frame').forEach((frame) => {
+          let child = null;
+          try { child = frame.contentDocument; } catch (_) {}
+          if (!child) return; // another origin: reached by its own injection, or off limits
+          const text = read(child);
+          if (text.trim()) texts.push(text);
+          walk(child, depth + 1);
+        });
+      };
+      walk(document, 0);
+      const pdfViewers = document.querySelectorAll(
+        'embed[type="application/pdf"], object[type="application/pdf"], embed[src*=".pdf" i], iframe[src*=".pdf" i], object[data*=".pdf" i]'
+      ).length;
+      return { texts, pdfViewers, url: location.href };
+    }
+  });
+
+  const found = [];
+  const seen = new Set();
+  let pdfViewers = 0;
+  for (const r of results) {
+    const info = r.result || {};
+    pdfViewers += info.pdfViewers || 0;
+    for (const raw of info.texts || []) {
+      const text = raw.trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        found.push({ frameId: r.frameId, text });
+      }
+    }
+  }
+  found.sort((a, b) => b.text.length - a.text.length);
+  console.info(`[QuestionHelper] Selection check: ${results.length} frame(s) read, ${found.length} with selected text, ${pdfViewers} embedded PDF viewer(s)`);
+  return { found, pdfViewers };
+}
+
+/** Why a page can't be read, for pages Chrome keeps extensions out of. */
+function unreadablePageMessage(url = '') {
+  if (/\.pdf($|[?#])/i.test(url) || url.startsWith('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai')) {
+    return "Chrome's PDF viewer doesn't let extensions read what you select. Right-click the selection → Help with this selection (that works in PDFs), or click 📋 and paste it in.";
+  }
+  if (url.startsWith('file:')) {
+    return 'To read files on your computer, turn on "Allow access to file URLs" for Question Helper in chrome://extensions, then refresh the page. Or click 📋 and paste the question in.';
+  }
+  if (/^(chrome|edge|about|devtools|view-source):/.test(url) || /chromewebstore\.google\.com|chrome\.google\.com\/webstore/.test(url)) {
+    return "Chrome doesn't let extensions read this page. Click 📋 and paste the question in.";
+  }
+  return null;
+}
+
+/**
+ * Use what the student selected in a tab as the question:
+ * 1. The page script in the frame holding the selection (loaded into it if needed) reads the selection
+ *    with its images and keeps it pinned.
+ * 2. If no page script can, the selected text read straight from the frames (or the context menu's
+ *    selectionText) is used as is.
+ */
+async function useSelectionInTab(tabId, frameIdHint, selectionTextHint = '') {
+  let found = [];
+  let pdfViewers = 0;
+  let scriptingFailed = false;
+  if (chrome.scripting) {
+    try {
+      ({ found, pdfViewers } = await readSelectedTextInFrames(tabId));
+    } catch (_) {
+      scriptingFailed = true;
+    }
+  }
+
+  const hinted = frameIdHint !== undefined && frameIdHint !== null ? [frameIdHint] : [];
+  const frameIds = [...new Set([...hinted, ...found.map(f => f.frameId), 0])];
+
+  let pageError = null;
+  if (!scriptingFailed) {
+    for (const frameId of frameIds) {
+      let res = await askFrameForSelection(tabId, frameId);
+      if (res.unreachable && chrome.scripting) {
+        try {
+          await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ['content.js'] });
+          res = await askFrameForSelection(tabId, frameId);
+        } catch (_) {}
+      }
+      if (res.ok) return res;
+      if (!res.unreachable && !res.noSelection && !pageError) pageError = res.error;
+    }
+  }
+
+  const text = (found[0]?.text || selectionTextHint || '').trim();
+  if (text) {
+    await ensureStateLoaded();
+    pickedFrom = null;
+    switchToQuestion(selectionTextQuestion(text));
+    return { ok: true, textOnly: true };
+  }
+
+  let url = '';
+  try {
+    url = (await chrome.tabs.get(tabId))?.url || '';
+  } catch (_) {}
+  return {
+    ok: false,
+    // The side panel offers the copied text (Cmd+C) instead, which works even where extensions can't read
+    canUseClipboard: true,
+    error: unreadablePageMessage(url) || pageError || unseenSelectionMessage(url, pdfViewers)
+  };
+}
+
+/** Why the selection wasn't visible, when the page itself could be read. */
+function unseenSelectionMessage(url, pdfViewers) {
+  if (pdfViewers > 0) {
+    return "This question is in a PDF viewer inside the page, and Chrome doesn't let extensions read what you select there.";
+  }
+  if (/^https:\/\/docs\.google\.com\/(document|presentation|spreadsheets)\//.test(url)) {
+    return "Google Docs draws its own text, so extensions can't see what you select.";
+  }
+  return "Chrome didn't report any selected text in the parts of this page the extension can read. The page may draw the text itself, or show it in a protected frame.";
+}
+
+// "Help with this selection" from the right-click menu
+if (chrome.contextMenus) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== SELECTION_MENU_ID || !tab?.id) return;
+
+    // Open synchronously: sidePanel.open() must run within the click's user gesture
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+    }
+
+    // The page script reads the selection with its formatting and images; if it can't, use the plain text
+    // Chrome hands the menu the selected text even where extensions can't run (e.g. its PDF viewer)
+    useSelectionInTab(tab.id, info.frameId || 0, info.selectionText || '').then(async (res) => {
+      if (!res.ok) {
+        await ensureStateLoaded();
+        latestState.error = res.error;
+        broadcastState();
+      }
+    });
+  });
+}
