@@ -2,7 +2,7 @@
 
 **Question Helper** is an AI study tutor that lives in the Chrome Side Panel (`chrome.sidePanel` API). When you're working through practice problems, it reads the question on your active tab and coaches you toward the answer: hints that get more specific each time, feedback on your own attempts, and a full worked solution once you've tried it yourself. It works with **Google Gemini** (free API key from Google AI Studio) or **Anthropic Claude**.
 
-**Status:** in progress. Hints, answer checking and worked solutions work today, and I'm still improving it.
+**Status:** in progress. Hints, answer checking, worked solutions and course materials work today, and I'm still improving it.
 
 It's built for practice and homework you're allowed to get help on. Don't use it on graded exams or anywhere outside help isn't permitted.
 
@@ -18,12 +18,29 @@ Each question keeps its own conversation. If you move to the next question and c
 
 ---
 
+## 📚 Course Materials
+
+Give the tutor the chapters, slides or notes you're studying, and it teaches the way your course does: your textbook's definitions, notation and methods, with page citations like *(Ch. 8, p. 256)* so you can go reread the passage.
+
+1. In **Settings → Course Materials**, enter the course (e.g. `CS 169A`) and choose one or more PDFs, `.txt` or `.md` files. The text is extracted in your browser with [pdf.js](https://github.com/mozilla/pdf.js).
+2. Titles are filled in automatically (`08-testing-tdd.pdf` becomes **Ch. 8: Testing TDD**) and can be renamed. Printed page numbers are detected from the page headers, so citations match your book rather than the PDF's page count.
+3. In the side panel, open **📚 Studying** and check what you're working on. New uploads are checked automatically. The tutor card shows a 📚 badge with the materials it used.
+
+How the materials reach the model:
+- **Up to ~75k tokens** (two typical textbook chapters are ~45k) are sent whole with every request, after the tutor's rules. The prefix stays identical between requests, so it is cached: Claude uses an explicit 1-hour prompt cache, and Gemini 2.5 models cache repeated prefixes automatically. Cache hits are logged in the service worker console.
+- **Larger selections** send only the pages most related to the current question, ranked with BM25, in book order.
+
+Scanned PDFs (pictures of pages) have no text layer, so they can't be read. Course PDFs are git-ignored so they never end up in this repo.
+
+---
+
 ## ⚡ Features
 
 - **Side Panel Integration**: Opens alongside your active tab.
 - **Dual AI Provider Support**:
   - **Google Gemini (Recommended / Free Tier)**: Use a free key from [Google AI Studio](https://aistudio.google.com/apikey). Defaults to `gemini-2.5-flash`, with automatic fallback to other available models when one is overloaded (503), rate limited (429) or unavailable (404).
   - **Anthropic Claude**: Claude Opus 5.5 (default), Sonnet 5.5 or Haiku 5.5 with your Anthropic Console key.
+- **Grounded in Your Course**: Upload textbook chapters or notes and the tutor uses their definitions and cites their pages (see [Course Materials](#-course-materials)).
 - **Automatic Question Detection**: A debounced (~400ms) `MutationObserver` picks up the new question when you click **Next** or navigate.
 - **Streaming Replies**: The tutor's replies stream in as they're written.
 - **Images & Diagrams**:
@@ -34,7 +51,7 @@ Each question keeps its own conversation. If you move to the next question and c
 - **Question Parsing**: Standard quiz DOM structures (`[role="radiogroup"]`, `.question-card`, forms, labels), PrairieLearn question panels (`<pl-question-panel>`, `<pl-multiple-choice>`, `<pl-number-input>`, ...), and LaTeX from KaTeX and MathJax.
 - **Site-Specific CSS Selectors**: Configure custom question container selectors per hostname in Settings.
 - **Survives Idle**: Conversations are kept in `chrome.storage.session`, so they aren't lost when Chrome suspends the background service worker. They are cleared when the browser closes.
-- **Privacy**: API keys are stored only in `chrome.storage.local`. They are never logged, synced, or sent anywhere except the provider's own API.
+- **Privacy**: API keys are stored only in `chrome.storage.local`. They are never logged, synced, or sent anywhere except the provider's own API. Course materials are also stored only in `chrome.storage.local`; selected ones are sent to your AI provider with each question.
 - **Light Theme**: The side panel and Settings page always use a light theme, whatever your system or browser theme.
 
 ---
@@ -137,8 +154,17 @@ QuestionHelper/
 ├── options.html          # Options / settings page
 ├── options.css           # Options page styling
 ├── options.js            # Settings controller (API keys, models, tutor preferences, site selectors)
+├── materials.js          # Settings: course material uploads (PDF text extraction, titles, removal)
+├── lib/
+│   ├── course-materials.js  # Page labels, titles, BM25 page ranking, materials block for the prompt
+│   └── pdfjs/            # pdf.js 6.4.299 browser build (Apache-2.0)
+├── tests/                # Node unit tests: node --test tests/*.test.mjs
 ├── icons/                # Extension icons (16x16, 48x48, 128x128)
 ├── sample_quiz.html      # Interactive practice page
 ├── sample_quiz.js        # Logic & canvas diagram for the practice page
 └── README.md             # Documentation
 ```
+
+### Running the tests
+
+With Node 22 or later: `node --test tests/*.test.mjs`. CI runs them on every push and pull request, along with manifest and syntax checks.

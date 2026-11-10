@@ -1,8 +1,8 @@
 name: PR Validation & Linting
 
 on:
+  # Every pull request, including ones stacked on another feature branch
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -18,7 +18,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22+ detects ES modules, which background.js and materials.js are
+          node-version: 24
 
       - name: Validate manifest.json syntax & references
         run: |
@@ -89,9 +90,12 @@ jobs:
       - name: JavaScript Syntax Check
         run: |
           echo "Checking JavaScript syntax..."
-          for file in *.js; do
+          for file in *.js lib/*.js; do
             if [ -f "$file" ]; then
               node --check "$file"
               echo "✓ Syntax OK: $file"
             fi
           done
+
+      - name: Unit Tests
+        run: node --test tests/*.test.mjs

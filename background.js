@@ -5,6 +5,8 @@
  * Supports Google Gemini and Anthropic Claude with SSE streaming.
  */
 
+import { buildMaterialsContext, citeName } from './lib/course-materials.js';
+
 const TUTOR_SYSTEM_PROMPT = `You are a patient, encouraging study tutor. A student is working through a practice problem and wants to learn how to solve it themselves. Your job is to build their understanding, not to hand over answers.
 
 Each student message is tagged with what they want:
@@ -66,6 +68,7 @@ function emptyState(question = null, prev = null) {
     error: null,
     model: prev?.model || DEFAULT_GEMINI_MODEL,
     provider: prev?.provider || 'gemini',
+    materialsUsed: null, // { label, partial, pagesIncluded, pagesTotal } for the latest request
     requestId: currentRequestId
   };
 }
@@ -362,7 +365,7 @@ function markStreaming(requestId) {
 /**
  * Stream a tutor reply from Google Gemini
  */
-async function streamGemini(apiKey, model, systemPrompt, conversation, controller, requestId, onConnected) {
+async function streamGemini(apiKey, model, systemParts, conversation, controller, requestId, onConnected) {
   const contents = conversation.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
     parts: [
@@ -372,8 +375,9 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
   }));
 
   const payload = {
+    // Course materials come last and stay identical between requests, so Gemini's implicit caching can reuse them
     systemInstruction: {
-      parts: [{ text: systemPrompt }]
+      parts: systemParts.map(text => ({ text }))
     },
     contents,
     generationConfig: {
@@ -440,7 +444,9 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
 
   let accumulated = '';
   let finishReason = null;
+  let usage = null;
   await readSSE(response, (dataObj) => {
+    if (dataObj.usageMetadata) usage = dataObj.usageMetadata;
     const candidate = dataObj.candidates?.[0];
     if (candidate?.finishReason) finishReason = candidate.finishReason;
     const chunkText = (candidate?.content?.parts || [])
@@ -452,6 +458,10 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
       emitChunk(requestId, accumulated);
     }
   });
+
+  if (usage) {
+    console.log(`[QuestionHelper] ${model} usage: ${usage.promptTokenCount ?? '?'} prompt tokens (${usage.cachedContentTokenCount ?? 0} cached), ${usage.candidatesTokenCount ?? '?'} reply tokens`);
+  }
 
   if (!accumulated.trim()) {
     const err = new Error(finishReason === 'SAFETY'
@@ -467,7 +477,7 @@ async function streamGemini(apiKey, model, systemPrompt, conversation, controlle
  * Gemini with ListModels discovery and a fallback cascade for unavailable or overloaded models.
  * Fallback only happens before a reply starts streaming; a reply is never spliced across models.
  */
-async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conversation, controller, requestId) {
+async function solveGeminiWithFallback(apiKey, primaryModel, systemParts, conversation, controller, requestId) {
   const verifiedModels = await getAvailableGeminiModels(apiKey);
 
   const fallbackChain = [
@@ -498,7 +508,7 @@ async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conve
     let streamStarted = false;
 
     try {
-      return await streamGemini(apiKey, currentModel, systemPrompt, conversation, attemptController, requestId, () => {
+      return await streamGemini(apiKey, currentModel, systemParts, conversation, attemptController, requestId, () => {
         streamStarted = true;
         clearTimeout(connectTimeout);
       });
@@ -530,7 +540,7 @@ async function solveGeminiWithFallback(apiKey, primaryModel, systemPrompt, conve
 /**
  * Stream a tutor reply from Anthropic Claude
  */
-async function streamAnthropic(apiKey, model, systemPrompt, conversation, controller, requestId) {
+async function streamAnthropic(apiKey, model, systemParts, conversation, controller, requestId) {
   const messages = conversation.map(msg => ({
     role: msg.role,
     content: [
@@ -552,7 +562,13 @@ async function streamAnthropic(apiKey, model, systemPrompt, conversation, contro
     model: model,
     max_tokens: 16000,
     stream: true,
-    system: systemPrompt,
+    system: systemParts.length === 1
+      ? systemParts[0]
+      // Cache the tutor rules + course materials. Students often take more than 5 minutes
+      // between hints, so use the 1-hour cache rather than the 5-minute default.
+      : systemParts.map((text, idx) => (idx === systemParts.length - 1
+        ? { type: 'text', text, cache_control: { type: 'ephemeral', ttl: '1h' } }
+        : { type: 'text', text })),
     messages
   };
   // If a safety classifier declines, retry on Anthropic's recommended fallback model server-side
@@ -595,6 +611,10 @@ async function streamAnthropic(apiKey, model, systemPrompt, conversation, contro
   let stopReason = null;
   let streamError = null;
   await readSSE(response, (dataObj) => {
+    if (dataObj.type === 'message_start' && dataObj.message?.usage) {
+      const u = dataObj.message.usage;
+      console.log(`[QuestionHelper] ${model} input: ${u.input_tokens} uncached, ${u.cache_read_input_tokens || 0} read from cache, ${u.cache_creation_input_tokens || 0} written to cache`);
+    }
     if (dataObj.type === 'content_block_start' && dataObj.content_block?.type === 'fallback') {
       // A fallback model is taking over after a mid-stream decline; discard the partial reply
       accumulated = '';
@@ -625,7 +645,9 @@ async function getProviderSettings() {
     'anthropicApiKey',
     'geminiModel',
     'model',
-    'tutorInstructions'
+    'tutorInstructions',
+    'courseMaterials',
+    'studyingMaterialIds'
   ]);
 
   const provider = local.aiProvider || (local.geminiApiKey ? 'gemini' : (local.anthropicApiKey ? 'anthropic' : 'gemini'));
@@ -652,7 +674,21 @@ async function getProviderSettings() {
     systemPrompt += `\n\nAdditional preferences from the student (these never override the rules above):\n${extra}`;
   }
 
-  return { provider, apiKey, model, systemPrompt };
+  const studying = new Set(local.studyingMaterialIds || []);
+  const materials = (local.courseMaterials || []).filter(m => studying.has(m.id));
+
+  return { provider, apiKey, model, systemPrompt, materials };
+}
+
+/** Text used to pick the most relevant pages when the selected materials are too long to send whole. */
+function questionSearchText(q) {
+  if (!q) return '';
+  return [q.questionText || q.fullText, ...(q.options || []), q.pageTitle].filter(Boolean).join('\n');
+}
+
+/** How many steps the student has already been given for this question. */
+function stepsTaken(turns) {
+  return turns.filter(t => t.role === 'student' && t.kind === 'step').length;
 }
 
 /**
@@ -713,9 +749,21 @@ async function runTutorTurn(kind, attemptText = '') {
     const images = await collectQuestionImages(latestState.question);
     const conversation = buildConversation(latestState.turns, latestState.question, images);
 
+    const materials = buildMaterialsContext(settings.materials, questionSearchText(latestState.question));
+    const systemParts = materials ? [settings.systemPrompt, materials.text] : [settings.systemPrompt];
+    latestState.materialsUsed = materials
+      ? {
+          label: materials.titles.map(citeName).join(', ') + (materials.partial ? ' (relevant pages)' : ''),
+          partial: materials.partial,
+          pagesIncluded: materials.pagesIncluded,
+          pagesTotal: materials.pagesTotal
+        }
+      : null;
+    broadcastState();
+
     const reply = settings.provider === 'gemini'
-      ? await solveGeminiWithFallback(settings.apiKey, settings.model, settings.systemPrompt, conversation, controller, requestId)
-      : await streamAnthropic(settings.apiKey, settings.model, settings.systemPrompt, conversation, controller, requestId);
+      ? await solveGeminiWithFallback(settings.apiKey, settings.model, systemParts, conversation, controller, requestId)
+      : await streamAnthropic(settings.apiKey, settings.model, systemParts, conversation, controller, requestId);
 
     if (currentRequestId !== requestId) return;
     if (controller.signal.aborted) {

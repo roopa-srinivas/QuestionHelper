@@ -171,7 +171,42 @@
       </div>
     </section>
 
-    <!-- Section 5: Site-Specific CSS Selectors -->
+    <!-- Section 5: Course Materials -->
+    <section class="settings-card" id="materialsSection">
+      <div class="card-title-group">
+        <div class="icon-wrap amber">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+        </div>
+        <div>
+          <h2>Course Materials</h2>
+          <p class="section-desc">Add the textbook chapters, slides or notes you're studying. The tutor teaches with their definitions and methods and cites the pages it draws on. Choose what you're studying right now from the side panel.</p>
+        </div>
+      </div>
+
+      <div class="selector-add-box">
+        <div class="selector-inputs">
+          <div class="input-col">
+            <label for="materialCourseInput">Course</label>
+            <input type="text" id="materialCourseInput" list="materialCourseList" placeholder="e.g. CS 169A" autocomplete="off">
+            <datalist id="materialCourseList"></datalist>
+          </div>
+          <div class="input-col flex-2">
+            <label for="materialFileInput">Files (PDF, .txt or .md)</label>
+            <input type="file" id="materialFileInput" accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown" multiple>
+          </div>
+        </div>
+        <button type="button" id="btnAddMaterials" class="secondary-btn">Add Materials</button>
+        <div id="materialsStatus" class="validation-result hidden" role="status"></div>
+      </div>
+
+      <div id="materialsList" class="materials-list"></div>
+      <span class="field-hint">Stored only in this browser. While a material is selected in the side panel, its text is sent to your AI provider with each question. Scanned PDFs (pictures of pages) have no text to read.</span>
+    </section>
+
+    <!-- Section 6: Site-Specific CSS Selectors -->
     <section class="settings-card">
       <div class="card-title-group">
         <div class="icon-wrap indigo">
@@ -259,5 +294,6 @@
   </div>
 
   <script src="options.js"></script>
+  <script type="module" src="materials.js"></script>
 </body>
 </html>

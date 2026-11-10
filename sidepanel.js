@@ -32,6 +32,10 @@ const emptyAnswerState = document.getElementById('emptyAnswerState');
 const emptyAnswerDesc = document.getElementById('emptyAnswerDesc');
 const conversationEl = document.getElementById('conversation');
 const modelBadge = document.getElementById('modelBadge');
+const materialsBadge = document.getElementById('materialsBadge');
+const studySummary = document.getElementById('studySummary');
+const studyList = document.getElementById('studyList');
+const btnManageMaterials = document.getElementById('btnManageMaterials');
 const btnResetConversation = document.getElementById('btnResetConversation');
 const answerCardContent = document.getElementById('answerCardContent');
 
@@ -366,6 +370,16 @@ function applyState(state) {
   if (state.model) {
     modelBadge.textContent = state.model;
   }
+  // Which course materials the last tutor request used
+  if (state.materialsUsed) {
+    materialsBadge.textContent = `📚 ${state.materialsUsed.label}`;
+    materialsBadge.title = state.materialsUsed.partial
+      ? `Used the ${state.materialsUsed.pagesIncluded} most relevant of ${state.materialsUsed.pagesTotal} pages`
+      : `Used all ${state.materialsUsed.pagesTotal} pages`;
+    materialsBadge.classList.remove('hidden');
+  } else {
+    materialsBadge.classList.add('hidden');
+  }
 
   updateStatusUI(state);
 
@@ -486,11 +500,100 @@ window.addEventListener('paste', (e) => {
 });
 
 // Open Settings
-btnOptions.addEventListener('click', () => {
+function openSettings() {
   if (chrome.runtime.openOptionsPage) {
     chrome.runtime.openOptionsPage();
   } else {
     window.open(chrome.runtime.getURL('options.html'));
+  }
+}
+btnOptions.addEventListener('click', openSettings);
+btnManageMaterials.addEventListener('click', openSettings);
+
+// --- Course materials picker ---
+
+function citeName(title) {
+  const match = title.match(/^(Ch\.\s*\d+)/i);
+  return match ? match[1] : title;
+}
+
+async function renderStudyPicker() {
+  const { courseMaterials = [], studyingMaterialIds = [] } =
+    await chrome.storage.local.get(['courseMaterials', 'studyingMaterialIds']);
+  const studying = new Set(studyingMaterialIds);
+
+  studyList.textContent = '';
+  if (courseMaterials.length === 0) {
+    studySummary.textContent = 'No course materials';
+    studySummary.classList.add('muted');
+    const empty = document.createElement('p');
+    empty.className = 'study-empty';
+    empty.textContent = 'Add textbook chapters or notes in Settings, and the tutor will teach from them and cite their pages.';
+    studyList.appendChild(empty);
+    return;
+  }
+
+  const courses = Array.from(new Set(courseMaterials.map(m => m.course || 'Other')));
+  for (const course of courses) {
+    const heading = document.createElement('div');
+    heading.className = 'study-course';
+    heading.textContent = course;
+    studyList.appendChild(heading);
+
+    for (const m of courseMaterials.filter(x => (x.course || 'Other') === course)) {
+      const label = document.createElement('label');
+      label.className = 'study-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.id = m.id;
+      box.checked = studying.has(m.id);
+      // Save what the checkboxes show, so quick clicks can't overwrite each other
+      box.addEventListener('change', () => {
+        const next = Array.from(studyList.querySelectorAll('input[type="checkbox"]:checked'), b => b.dataset.id);
+        chrome.storage.local.set({ studyingMaterialIds: next });
+      });
+      const text = document.createElement('span');
+      text.textContent = m.title;
+      label.append(box, text);
+      studyList.appendChild(label);
+    }
+  }
+
+  updateStudySummary(courseMaterials, studying);
+}
+
+function updateStudySummary(courseMaterials, studying) {
+  if (courseMaterials.length === 0) return;
+  const selected = courseMaterials.filter(m => studying.has(m.id));
+  if (selected.length === 0) {
+    studySummary.textContent = 'Nothing selected';
+    studySummary.classList.add('muted');
+  } else {
+    const selectedCourses = Array.from(new Set(selected.map(m => m.course || 'Other')));
+    studySummary.textContent = selectedCourses
+      .map(c => `${c} · ${selected.filter(m => (m.course || 'Other') === c).map(m => citeName(m.title)).join(', ')}`)
+      .join(' | ');
+    studySummary.classList.remove('muted');
+  }
+}
+
+// Only a selection change: update the checkboxes in place so keyboard focus stays put
+async function syncStudySelection() {
+  const { courseMaterials = [], studyingMaterialIds = [] } =
+    await chrome.storage.local.get(['courseMaterials', 'studyingMaterialIds']);
+  const studying = new Set(studyingMaterialIds);
+  studyList.querySelectorAll('input[type="checkbox"]').forEach(box => {
+    box.checked = studying.has(box.dataset.id);
+  });
+  updateStudySummary(courseMaterials, studying);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.courseMaterials) {
+    renderStudyPicker();
+  } else if (changes.studyingMaterialIds) {
+    syncStudySelection();
   }
 });
 
@@ -534,6 +637,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 // Initialize on Load
 document.addEventListener('DOMContentLoaded', () => {
+  renderStudyPicker();
   safeSendMessage({ type: 'GET_CURRENT_STATE' }, (res) => {
     if (res && res.state) {
       applyState(res.state);
