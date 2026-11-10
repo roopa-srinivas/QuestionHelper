@@ -189,6 +189,38 @@ body {
   text-overflow: ellipsis;
 }
 
+.banner-content > svg {
+  flex-shrink: 0;
+}
+
+.banner-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.banner-action {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.banner-action:hover {
+  background: var(--accent-light);
+}
+
 .banner-close {
   background: none;
   border: none;

@@ -52,7 +52,10 @@
           <line x1="12" y1="8" x2="12" y2="12"></line>
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
-        <span id="errorMessage">Error details</span>
+        <div class="banner-text">
+          <span id="errorMessage">Error details</span>
+          <button id="btnErrorAction" class="banner-action hidden"></button>
+        </div>
       </div>
       <button id="btnDismissError" class="banner-close" title="Dismiss">&times;</button>
     </div>
@@ -100,6 +103,14 @@
                 <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
               </svg>
             </button>
+            <button id="btnUseSelection" class="icon-btn small" title="Read the text you selected on the page">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 7V5h16v2"></path>
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="9" y1="19" x2="15" y2="19"></line>
+                <path d="M3 13h2M19 13h2" stroke-dasharray="2 2"></path>
+              </svg>
+            </button>
             <button id="btnPickQuestion" class="icon-btn small" title="Choose a question on the page">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="8"></circle>
@@ -130,7 +141,7 @@
           <div id="emptyQuestionState" class="empty-state">
             <div class="empty-icon">🔍</div>
             <p class="empty-title">Waiting for Question...</p>
-            <p class="empty-desc">Open a practice question, or click <strong>🎯</strong> above to choose one on the page. If that doesn't work, click <strong>📋</strong> and paste the question in.</p>
+            <p class="empty-desc">Open a practice question, click <strong>🎯</strong> above to choose one on the page, or select its text and click <strong>T</strong> (or right-click → <strong>Help with this selection</strong>). If none of that works, click <strong>📋</strong> and paste the question in.</p>
           </div>
           <div id="detectedQuestionContent" class="question-content hidden">
             <div id="questionText" class="question-text markdown-body"></div>

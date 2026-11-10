@@ -8,7 +8,10 @@
     "storage",
     "activeTab",
     "tabs",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "contextMenus",
+    "scripting",
+    "clipboardRead"
   ],
   "host_permissions": [
     "<all_urls>",

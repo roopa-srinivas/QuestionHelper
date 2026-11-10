@@ -6,9 +6,16 @@
  */
 
 (() => {
-  // Prevent duplicate injection
-  if (window.__questionHelperInjected) return;
-  window.__questionHelperInjected = true;
+  // Prevent duplicate injection. A copy left over from before the extension was reloaded has lost its
+  // connection to the extension (chrome.runtime.id is gone), so a fresh copy takes over from it.
+  if (window.__questionHelperAlive && window.__questionHelperAlive()) return;
+  window.__questionHelperAlive = () => {
+    try {
+      return !!(chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      return false;
+    }
+  };
 
   // Track question fingerprint across in-memory changes and full page reloads
   const SESSION_STORAGE_KEY = '__qh_active_question_fp';
@@ -20,7 +27,8 @@
   let debounceTimer = null;
   const DEBOUNCE_DELAY_MS = 400;
 
-  // A question the student chose on the page with the 🎯 picker ({ element, url }); see the question picker below
+  // A question the student chose on the page: { element } from the 🎯 picker or { range } from a
+  // text selection, plus the url it was chosen on. See "Choosing the question" below.
   let pinned = null;
   let picker = null;
 
@@ -909,6 +917,7 @@
       '.question-content'
     ];
 
+    // (A selection is read exactly as selected, so it skips this)
     let dedicatedStem = '';
     for (const sel of (scope.useDedicatedStem ? promptContainerSelectors : [])) {
       const promptEl = scope.queryAll(sel)[0];
@@ -1462,15 +1471,21 @@
     '.que, .takeQuestionDiv, .moodle-question, .assessment-question, .quiz-item, fieldset.question, ' +
     'pl-question-panel, .pl-question-panel, form.question-form';
 
+  const SELECTION_LABEL = 'Your selection';
   const PINNED_IMAGE_LIMIT = 8;
 
   function pinnedIsAlive() {
     if (!pinned || window.location.href !== pinned.url) return false;
-    return pinned.element.isConnected;
+    if (pinned.result) return true; // text selected inside a text box: kept as read
+    if (pinned.element) return pinned.element.isConnected;
+    const r = pinned.range;
+    return r.startContainer.isConnected && r.endContainer.isConnected && !r.collapsed;
   }
 
   /** Read the pinned question again, with every image and SVG diagram in it. */
   async function extractPinned() {
+    if (pinned.result) return pinned.result;
+    if (pinned.range) return extractFromRange(pinned.range, pinned.text);
     const res = extractFromScope({ ...containerScope(pinned.element, PICKED_LABEL), imageLimit: PINNED_IMAGE_LIMIT });
     return res ? addSvgImages(res, pinned.element.querySelectorAll('svg'), PINNED_IMAGE_LIMIT) : null;
   }
@@ -1486,6 +1501,165 @@
 
   function unpinQuestion() {
     pinned = null;
+  }
+
+  // --- Reading a text selection ---
+
+  /** Elements inside the selection that match a selector (used to find its images). */
+  function elementsInRange(range, selector) {
+    const common = range.commonAncestorContainer;
+    const root = common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement;
+    if (!root) return [];
+    return Array.from(root.querySelectorAll(selector)).filter(el => {
+      try { return range.intersectsNode(el); } catch (_) { return false; }
+    });
+  }
+
+  /**
+   * The selection exactly as selected, plus any images and diagrams inside it. `text` is the selection's
+   * text as Chrome shows it (Selection.toString(), captured when it was made), which unlike Range.toString()
+   * keeps line breaks between blocks and leaves out hidden text.
+   */
+  async function extractFromRange(range, text) {
+    text = normalizeExtractedText(text || range.toString());
+    const images = imagesFromElements(elementsInRange(range, 'canvas'), elementsInRange(range, 'img'), PINNED_IMAGE_LIMIT);
+    const res = { ...textOnlyQuestion(text), images, hasVisualMedia: images.length > 0 };
+    return addSvgImages(res, elementsInRange(range, 'svg'), PINNED_IMAGE_LIMIT);
+  }
+
+  function hasContent(res) {
+    return !!res && !!(res.questionText.trim() || res.images.length);
+  }
+
+  // Remember the last selection made on the page: some pages clear it when focus moves to the side panel
+  const REMEMBERED_SELECTION_MS = 10 * 60 * 1000;
+  let lastSelection = null;   // { range, text, at }
+  let lastFieldSelection = null; // { text, at } for text selected inside a text box
+
+  document.addEventListener('selectionchange', () => {
+    // Runs on every click and caret move, so skip the (slower) shadow DOM lookup here
+    const live = liveSelection(false);
+    if (live) lastSelection = { ...live, at: Date.now() };
+  });
+  document.addEventListener('select', (e) => {
+    const text = fieldSelectionText(e.target);
+    if (text) lastFieldSelection = { text, at: Date.now() };
+  }, true);
+
+  /** All open shadow roots on the page, so selections inside web components can be read too. */
+  function openShadowRoots() {
+    const roots = [];
+    const walk = (root) => {
+      root.querySelectorAll('*').forEach(el => {
+        if (el.shadowRoot) {
+          roots.push(el.shadowRoot);
+          walk(el.shadowRoot);
+        }
+      });
+    };
+    walk(document);
+    return roots;
+  }
+
+  /** The current selection as { range, text }, or null if nothing is selected. */
+  function liveSelection(includeShadow = true) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (!sel.isCollapsed && !range.collapsed) return { range: range.cloneRange(), text: sel.toString() };
+
+    // Selections inside a shadow root are only visible through getComposedRanges (Chrome 137+)
+    if (includeShadow && typeof sel.getComposedRanges === 'function') {
+      try {
+        const roots = openShadowRoots();
+        if (roots.length > 0) {
+          const [composed] = sel.getComposedRanges({ shadowRoots: roots });
+          if (composed && !composed.collapsed) {
+            const r = document.createRange();
+            r.setStart(composed.startContainer, composed.startOffset);
+            r.setEnd(composed.endContainer, composed.endOffset);
+            if (!r.collapsed) return { range: r, text: sel.toString() || r.toString() };
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function fieldSelectionText(el) {
+    if (!el || !(el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) return '';
+    try {
+      if (typeof el.selectionStart !== 'number' || el.selectionEnd <= el.selectionStart) return '';
+      return el.value.slice(el.selectionStart, el.selectionEnd).trim();
+    } catch (_) {
+      return ''; // Some input types (number, email) don't expose a selection
+    }
+  }
+
+  function isFresh(entry) {
+    return entry && Date.now() - entry.at < REMEMBERED_SELECTION_MS;
+  }
+
+  /** What the student selected: a live selection, a remembered one, or text selected in a text box. */
+  function findSelection() {
+    // Text selected inside a text box comes first: Chrome reports the box itself as the page selection
+    const fieldText = fieldSelectionText(document.activeElement);
+    if (fieldText) return { text: fieldText };
+    const live = liveSelection();
+    if (live) return live;
+    if (isFresh(lastSelection) && lastSelection.range.startContainer.isConnected && !lastSelection.range.collapsed) {
+      return { range: lastSelection.range, text: lastSelection.text };
+    }
+    if (isFresh(lastFieldSelection)) return { text: lastFieldSelection.text };
+    return null;
+  }
+
+  function textOnlyQuestion(text) {
+    return {
+      questionText: text,
+      options: [],
+      optionsText: '',
+      fullText: text,
+      selectorUsed: SELECTION_LABEL,
+      hasVisualMedia: false,
+      images: [],
+      blankInputs: [],
+      isFillInBlank: false,
+      url: window.location.href,
+      pageTitle: document.title
+    };
+  }
+
+  async function useSelection() {
+    const found = findSelection();
+    if (!found) {
+      return {
+        ok: false,
+        noSelection: true,
+        error: 'No selection found. Drag across the question\'s text, choices and any diagrams, then click T (or right-click the selection → Help with this selection).'
+      };
+    }
+
+    let res;
+    let range = null;
+    if (found.range) {
+      range = found.range;
+      res = await extractFromRange(range, found.text);
+    } else {
+      res = textOnlyQuestion(found.text);
+    }
+    if (!hasContent(res)) {
+      return {
+        ok: false,
+        error: "Your selection has no text the extension can read. Some pages (Google Docs, PDFs, some quiz apps) draw text as images. Use Capture Tab (the camera icon), or paste the question in."
+      };
+    }
+
+    if (picker) finishPicker(null);
+    pinned = range ? { range, text: found.text, url: window.location.href } : { result: res, url: window.location.href };
+    lastQuestionFp = getQuestionFingerprint(res);
+    safeSendMessage({ type: 'QUESTION_DETECTED', data: res, forced: true, picked: true });
+    return { ok: true, images: res.images.length, options: res.options.length };
   }
 
   function visibleTextLength(el) {
@@ -1664,6 +1838,14 @@
     if (message.type === 'GET_CURRENT_QUESTION') {
       (pinnedIsAlive() ? extractPinned() : extractQuestion()).then((res) => {
         sendResponse({ data: res });
+      });
+      return true;
+    }
+
+    if (message.type === 'USE_SELECTION') {
+      useSelection().then(sendResponse).catch((err) => {
+        console.warn('[QuestionHelper] Could not read the selection:', err);
+        sendResponse({ ok: false, error: `Couldn't read that selection (${err.message || err}).` });
       });
       return true;
     }
