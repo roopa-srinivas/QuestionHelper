@@ -20,6 +20,10 @@
   let debounceTimer = null;
   const DEBOUNCE_DELAY_MS = 400;
 
+  // A question the student chose on the page with the 🎯 picker ({ element, url }); see the question picker below
+  let pinned = null;
+  let picker = null;
+
   /**
    * Helper: Check if element is visible on page
    */
@@ -174,6 +178,11 @@
       const tex = scriptEl.textContent.trim();
       if (tex) {
         const mathStr = isDisplay ? `\n$$\n${tex}\n$$\n` : ` $${tex}$ `;
+        // MathJax 2 renders the formula in the element just before its script; drop it so the math isn't doubled
+        const rendered = scriptEl.previousElementSibling;
+        if (rendered && rendered.matches('.MathJax, .MathJax_Display, .MathJax_SVG, .MathJax_SVG_Display, .MathJax_CHTML')) {
+          rendered.remove();
+        }
         const parentSpan = scriptEl.closest('.MathJax, .MathJax_Display') || scriptEl;
         parentSpan.replaceWith(document.createTextNode(mathStr));
       }
@@ -476,9 +485,14 @@
   /**
    * Check if container has visual media (canvas, image, iframe, svg)
    */
+  const VISUAL_MEDIA_SELECTOR = 'canvas, img:not([alt*="avatar"]):not([class*="icon"]):not([src*="logo"]), svg:not([class*="icon"]), iframe';
+
   function detectVisualMedia(container) {
     if (!container) return false;
-    const medias = container.querySelectorAll('canvas, img:not([alt*="avatar"]):not([class*="icon"]):not([src*="logo"]), svg:not([class*="icon"]), iframe');
+    return hasVisibleMedia(container.querySelectorAll(VISUAL_MEDIA_SELECTOR));
+  }
+
+  function hasVisibleMedia(medias) {
     for (const media of medias) {
       if (isElementVisible(media)) {
         const rect = media.getBoundingClientRect();
@@ -495,11 +509,14 @@
    */
   function extractImagesFromContainer(container) {
     if (!container) return [];
+    return imagesFromElements(container.querySelectorAll('canvas'), container.querySelectorAll('img'), 4);
+  }
+
+  function imagesFromElements(canvases, imgs, limit = 4) {
     const images = [];
     const seenData = new Set();
 
     // 1. HTML5 Canvas diagrams
-    const canvases = container.querySelectorAll('canvas');
     for (const canvas of canvases) {
       if (!isElementVisible(canvas)) continue;
       const rect = canvas.getBoundingClientRect();
@@ -522,7 +539,6 @@
     }
 
     // 2. Images (<img>)
-    const imgs = container.querySelectorAll('img');
     for (const img of imgs) {
       if (!isElementVisible(img)) continue;
       const alt = (img.getAttribute('alt') || '').toLowerCase();
@@ -574,7 +590,72 @@
       }
     }
 
-    return images.slice(0, 4);
+    return images.slice(0, limit);
+  }
+
+  /**
+   * Turn inline <svg> diagrams into PNG images the model can see. Page CSS doesn't travel with
+   * a serialized SVG, so the computed colors, strokes and fonts are copied onto the copy first.
+   */
+  const SVG_STYLE_PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-opacity',
+    'opacity', 'font-family', 'font-size', 'font-weight', 'font-style', 'text-anchor', 'dominant-baseline', 'color'];
+
+  async function svgToImage(svg) {
+    if (!isElementVisible(svg)) return null;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return null;
+    if (/icon|logo/i.test(svg.getAttribute('class') || '') || svg.closest('button, a[role="button"]')) return null;
+
+    const clone = svg.cloneNode(true);
+    const liveEls = [svg, ...svg.querySelectorAll('*')];
+    const cloneEls = [clone, ...clone.querySelectorAll('*')];
+    liveEls.forEach((el, i) => {
+      const cs = window.getComputedStyle(el);
+      const target = cloneEls[i];
+      if (!target) return;
+      SVG_STYLE_PROPS.forEach(prop => {
+        const value = cs.getPropertyValue(prop);
+        if (value) target.style.setProperty(prop, value);
+      });
+    });
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(rect.width));
+    clone.setAttribute('height', String(rect.height));
+
+    try {
+      const xml = new XMLSerializer().serializeToString(clone);
+      const img = new Image();
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+      await img.decode();
+      const scale = Math.min(2, 1600 / Math.max(rect.width, rect.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(rect.width * scale);
+      canvas.height = Math.round(rect.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/png');
+      const title = svg.querySelector('title')?.textContent?.trim() || svg.getAttribute('aria-label') || 'SVG Diagram';
+      return { mimeType: 'image/png', data: dataUrl.split(',')[1], type: 'svg', description: title };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Add rasterized SVG diagrams to an extracted question, up to `limit` images in total. */
+  async function addSvgImages(result, svgs, limit) {
+    for (const svg of svgs) {
+      if (result.images.length >= limit) break;
+      // Skip SVGs nested in another SVG (the outer one already includes them)
+      if (svg.parentElement && svg.parentElement.closest('svg')) continue;
+      const image = await svgToImage(svg);
+      if (image) {
+        result.images.push(image);
+        result.hasVisualMedia = true;
+      }
+    }
+    return result;
   }
 
   /**
@@ -738,40 +819,60 @@
   /**
    * Extract question stem and choices from a candidate container element
    */
+  const CHOICE_SELECTORS = [
+    'pl-multiple-choice .form-check',
+    'pl-multiple-choice pl-answer',
+    'pl-checkbox .form-check',
+    'pl-checkbox pl-answer',
+    '.pl-multiple-choice-option',
+    '.choice',
+    '.option',
+    '.quiz-option',
+    '.choice-label',
+    '[data-choice]',
+    '.answers .answer',
+    'ul.choices > li',
+    'ul.answers > li',
+    'ol.choices > li',
+    '[role="radio"]',
+    '[role="checkbox"]'
+  ];
+
+  /**
+   * Where a question is read from: a page element (automatic detection, the 🎯 picker)
+   * or a text selection. Both give live elements to inspect and a detached copy for text.
+   */
+  function containerScope(container, label) {
+    return {
+      label,
+      queryAll: sel => Array.from(container.querySelectorAll(sel)),
+      labelFor: id => container.querySelector(`label[for="${CSS.escape(id)}"]`),
+      cloneForText: () => container.cloneNode(true),
+      useDedicatedStem: true,
+      imageLimit: 4
+    };
+  }
+
   function extractFromContainer(container, selectorLabel) {
     if (!container || !isElementVisible(container)) return null;
+    return extractFromScope(containerScope(container, selectorLabel));
+  }
 
-    // Detect options / choices inside container
-    const choiceSelectors = [
-      'pl-multiple-choice .form-check',
-      'pl-multiple-choice pl-answer',
-      'pl-checkbox .form-check',
-      'pl-checkbox pl-answer',
-      '.pl-multiple-choice-option',
-      '.choice',
-      '.option',
-      '.quiz-option',
-      '.choice-label',
-      '[data-choice]',
-      '.answers .answer',
-      'ul.choices > li',
-      'ul.answers > li',
-      'ol.choices > li',
-      '[role="radio"]',
-      '[role="checkbox"]'
-    ];
+  function extractFromScope(scope) {
+    const selectorLabel = scope.label;
+    const choiceSelectors = CHOICE_SELECTORS;
 
     // Check for radio and checkbox inputs directly if present
-    const inputs = Array.from(container.querySelectorAll('input[type="radio"], input[type="checkbox"]')).filter(isElementVisible);
+    const inputs = scope.queryAll('input[type="radio"], input[type="checkbox"]').filter(isElementVisible);
     let optionNodes = [];
     if (inputs.length > 0) {
       optionNodes = inputs.map(inp => {
         const id = inp.id;
-        const label = id ? container.querySelector(`label[for="${id}"]`) : null;
+        const label = id ? scope.labelFor(id) : null;
         return label || inp.closest('label') || inp.parentElement || inp;
       });
     } else {
-      optionNodes = Array.from(container.querySelectorAll(choiceSelectors.join(', '))).filter(isElementVisible);
+      optionNodes = scope.queryAll(choiceSelectors.join(', ')).filter(isElementVisible);
     }
 
     const options = [];
@@ -809,8 +910,8 @@
     ];
 
     let dedicatedStem = '';
-    for (const sel of promptContainerSelectors) {
-      const promptEl = container.querySelector(sel);
+    for (const sel of (scope.useDedicatedStem ? promptContainerSelectors : [])) {
+      const promptEl = scope.queryAll(sel)[0];
       if (promptEl && isElementVisible(promptEl)) {
         const text = extractCleanDomText(promptEl);
         if (text && text.length > 10) {
@@ -821,7 +922,7 @@
     }
 
     // 2. Clone entire container and strip choices, buttons, and navigation to get complete question
-    const clone = container.cloneNode(true);
+    const clone = scope.cloneForText();
 
     // Remove choice groups and wrappers
     clone.querySelectorAll(
@@ -835,7 +936,7 @@
     clone.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(inp => {
       const id = inp.id;
       if (id) {
-        const lbl = clone.querySelector(`label[for="${id}"]`);
+        const lbl = clone.querySelector(`label[for="${CSS.escape(id)}"]`);
         if (lbl) lbl.remove();
       }
       const parentLabel = inp.closest('label');
@@ -895,7 +996,7 @@
     const seenInputNames = new Set();
 
     // 1. PrairieLearn custom input tags and rendered component classes
-    const plInputEls = container.querySelectorAll(
+    const plInputEls = scope.queryAll(
       'pl-number-input, pl-string-input, pl-symbolic-input, pl-integer-input, pl-matrix-input, ' +
       '.pl-number-input, .pl-string-input, .pl-symbolic-input, .pl-integer-input, .pl-matrix-input'
     );
@@ -936,9 +1037,9 @@
 
     // 2. Standard HTML text/number inputs (if custom tags didn't already capture them)
     if (blankInputs.length === 0) {
-      const rawInputs = Array.from(container.querySelectorAll(
+      const rawInputs = scope.queryAll(
         'input[type="text"]:not([readonly]), input[type="number"]:not([readonly]), input:not([type]):not([readonly])'
-      )).filter(isElementVisible);
+      ).filter(isElementVisible);
 
       rawInputs.forEach(inp => {
         // Exclude search, buttons, radio, checkbox, csrf tokens
@@ -948,7 +1049,7 @@
           seenInputNames.add(name);
           const parentGroup = inp.closest('.input-group, .form-group, .pl-number-input, .pl-string-input');
           const label = parentGroup?.querySelector('.pl-number-input-label, .pl-input-label, .input-group-prepend, .input-group-text:first-child')?.textContent?.trim() ||
-                        container.querySelector(`label[for="${inp.id}"]`)?.textContent?.trim() || '';
+                        (inp.id ? scope.labelFor(inp.id)?.textContent?.trim() : '') || '';
           const suffix = parentGroup?.querySelector('.pl-number-input-suffix, .pl-input-suffix, .input-group-append, .input-group-text:last-child')?.textContent?.trim() || '';
           blankInputs.push({
             name: name,
@@ -966,8 +1067,8 @@
 
     const isFillInBlank = (blankInputs.length > 0 || /_{2,}|\bfill\s+in\s+the\s+blank\b/i.test(questionStem)) && options.length === 0;
 
-    const hasMedia = detectVisualMedia(container);
-    const images = extractImagesFromContainer(container);
+    const hasMedia = hasVisibleMedia(scope.queryAll(VISUAL_MEDIA_SELECTOR));
+    const images = imagesFromElements(scope.queryAll('canvas'), scope.queryAll('img'), scope.imageLimit);
 
     // Build unified full text
     let fullText = questionStem;
@@ -1221,6 +1322,17 @@
    * Run extraction and notify background if question has changed
    */
   async function checkAndSendQuestion(force = false) {
+    // A question the student picked stays put: scrolling, focus and page changes don't replace it
+    if (pinned) {
+      if (pinnedIsAlive()) {
+        if (force) await sendPinnedQuestion();
+        return;
+      }
+      // The picked question left the page (or the page navigated): go back to automatic detection
+      unpinQuestion();
+      force = true;
+    }
+
     try {
       const extracted = await extractQuestion();
       if (!extracted) {
@@ -1340,6 +1452,206 @@
     }
   }, true);
 
+  // --- Question picker: the student chooses which question on the page to work on ---
+
+  const PICKED_LABEL = 'Picked by you';
+  const KNOWN_QUESTION_SELECTOR =
+    '.problem, .problem-wrapper, .wrapper-problem-response, div[id^="problem_"], [data-block-type="problem"], ' +
+    '.question-container, .quiz-question, .question-card, .question_holder, .display_question, .test-question, ' +
+    '[data-question], [data-testid*="question"], .rc-FormPartsQuestion, .freebirdFormviewerViewNumberedItemContainer, ' +
+    '.que, .takeQuestionDiv, .moodle-question, .assessment-question, .quiz-item, fieldset.question, ' +
+    'pl-question-panel, .pl-question-panel, form.question-form';
+
+  const PINNED_IMAGE_LIMIT = 8;
+
+  function pinnedIsAlive() {
+    if (!pinned || window.location.href !== pinned.url) return false;
+    return pinned.element.isConnected;
+  }
+
+  /** Read the pinned question again, with every image and SVG diagram in it. */
+  async function extractPinned() {
+    const res = extractFromScope({ ...containerScope(pinned.element, PICKED_LABEL), imageLimit: PINNED_IMAGE_LIMIT });
+    return res ? addSvgImages(res, pinned.element.querySelectorAll('svg'), PINNED_IMAGE_LIMIT) : null;
+  }
+
+  async function sendPinnedQuestion() {
+    if (!pinned || (pinned.element && !isElementVisible(pinned.element))) return false;
+    const res = await extractPinned();
+    if (!res) return false;
+    lastQuestionFp = getQuestionFingerprint(res);
+    safeSendMessage({ type: 'QUESTION_DETECTED', data: res, forced: true, picked: true });
+    return true;
+  }
+
+  function unpinQuestion() {
+    pinned = null;
+  }
+
+  function visibleTextLength(el) {
+    return ((el.innerText || el.textContent || '').trim()).length;
+  }
+
+  /** Ancestors of the hovered element, innermost first, stopping before any that hold several questions. */
+  function pickChain(target) {
+    const chain = [];
+    let el = target;
+    while (el && el !== document.body && el !== document.documentElement) {
+      if (chain.length > 0 && containsMultipleQuestions(el)) break;
+      chain.push(el);
+      el = el.parentElement;
+    }
+    return chain;
+  }
+
+  /** Best guess at the question around the hovered element, as an index into its chain. */
+  function defaultPickIndex(chain) {
+    let idx = chain.findIndex(el => el.matches(KNOWN_QUESTION_SELECTOR));
+    if (idx === -1) {
+      idx = chain.findIndex(el => visibleTextLength(el) >= 40 &&
+        (el.querySelector('input, select, textarea, [role="radio"], [role="checkbox"]') || /\?/.test(el.innerText || '')));
+    }
+    if (idx === -1) idx = chain.findIndex(el => visibleTextLength(el) >= 20);
+    if (idx === -1) return 0;
+    // A choices-only block grows to include its question stem
+    const resolved = resolveToQuestionContainer(chain[idx]);
+    const resolvedIdx = chain.indexOf(resolved);
+    return resolvedIdx > idx ? resolvedIdx : idx;
+  }
+
+  function positionOverlay() {
+    if (!picker) return;
+    const el = picker.chain[picker.index];
+    if (!el) {
+      picker.overlay.style.display = 'none';
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    Object.assign(picker.overlay.style, {
+      display: 'block',
+      top: `${r.top - 4}px`,
+      left: `${r.left - 4}px`,
+      width: `${r.width + 8}px`,
+      height: `${r.height + 8}px`
+    });
+  }
+
+  function isInsideBanner(e) {
+    return picker && e.composedPath().includes(picker.bannerHost);
+  }
+
+  function onPickerHover(e) {
+    if (!picker || isInsideBanner(e) || e.target === picker.hoverTarget) return;
+    picker.hoverTarget = e.target;
+    picker.chain = pickChain(e.target);
+    picker.index = defaultPickIndex(picker.chain);
+    positionOverlay();
+  }
+
+  function swallow(e) {
+    if (!picker || isInsideBanner(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }
+
+  function onPickerClick(e) {
+    if (!picker || isInsideBanner(e)) return;
+    swallow(e);
+    const el = picker.chain[picker.index];
+    if (el) finishPicker(el);
+  }
+
+  function onPickerKey(e) {
+    if (!picker) return;
+    if (e.key === 'Escape') {
+      swallow(e);
+      finishPicker(null);
+    } else if (e.key === 'ArrowUp' && picker.index < picker.chain.length - 1) {
+      swallow(e);
+      picker.index++;
+      positionOverlay();
+    } else if (e.key === 'ArrowDown' && picker.index > 0) {
+      swallow(e);
+      picker.index--;
+      positionOverlay();
+    } else if (e.key === 'Enter' && picker.chain[picker.index]) {
+      swallow(e);
+      finishPicker(picker.chain[picker.index]);
+    }
+  }
+
+  const PICKER_EVENTS = [
+    ['mouseover', onPickerHover],
+    ['click', onPickerClick],
+    ['mousedown', swallow],
+    ['mouseup', swallow],
+    ['pointerdown', swallow],
+    ['pointerup', swallow],
+    ['dblclick', swallow],
+    ['keydown', onPickerKey]
+  ];
+
+  function startPicker() {
+    if (picker) return;
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'all: initial; position: fixed; display: none; z-index: 2147483646; pointer-events: none; ' +
+      'box-sizing: border-box; border: 2px solid #6366f1; border-radius: 8px; background: rgba(99, 102, 241, 0.08); ' +
+      'box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18); transition: top 60ms, left 60ms, width 60ms, height 60ms;';
+
+    const bannerHost = document.createElement('div');
+    bannerHost.style.cssText = 'all: initial; position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2147483647;';
+    const shadow = bannerHost.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        .bar { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-radius: 12px;
+          background: #ffffff; color: #0f172a; border: 1px solid #c7d2fe; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+          font: 500 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: min(640px, calc(100vw - 32px)); }
+        .hint { color: #475569; font-size: 12px; }
+        kbd { font: 600 11px system-ui, sans-serif; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 4px; }
+        button { font: 600 12px system-ui, sans-serif; color: #4338ca; background: #eef2ff; border: none; border-radius: 8px;
+          padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+        button:hover { background: #e0e7ff; }
+      </style>
+      <div class="bar" role="status">
+        <div>🎯 <strong>Click the question you want help with.</strong>
+          <div class="hint"><kbd>↑</kbd> select more · <kbd>↓</kbd> select less · <kbd>Esc</kbd> cancel</div></div>
+        <button type="button">Cancel</button>
+      </div>`;
+    shadow.querySelector('button').addEventListener('click', () => finishPicker(null));
+
+    document.documentElement.append(overlay, bannerHost);
+    picker = { overlay, bannerHost, chain: [], index: 0, hoverTarget: null };
+
+    PICKER_EVENTS.forEach(([type, fn]) => window.addEventListener(type, fn, true));
+    window.addEventListener('scroll', positionOverlay, true);
+    window.addEventListener('resize', positionOverlay);
+  }
+
+  async function finishPicker(chosen) {
+    if (!picker) return;
+    PICKER_EVENTS.forEach(([type, fn]) => window.removeEventListener(type, fn, true));
+    window.removeEventListener('scroll', positionOverlay, true);
+    window.removeEventListener('resize', positionOverlay);
+    picker.overlay.remove();
+    picker.bannerHost.remove();
+    picker = null;
+
+    if (!chosen) {
+      safeSendMessage({ type: 'PICKER_ENDED', picked: false });
+      return;
+    }
+    pinned = { element: chosen, url: window.location.href };
+    const ok = await sendPinnedQuestion();
+    if (!ok) unpinQuestion();
+    safeSendMessage({
+      type: 'PICKER_ENDED',
+      picked: ok,
+      error: ok ? null : "Couldn't read a question there. Try clicking closer to the question's text, or press ↑ to select more."
+    });
+  }
+
   // --- Message Listener from Background / Side Panel ---
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'FORCE_EXTRACT') {
@@ -1350,9 +1662,27 @@
     }
 
     if (message.type === 'GET_CURRENT_QUESTION') {
-      extractQuestion().then((res) => {
+      (pinnedIsAlive() ? extractPinned() : extractQuestion()).then((res) => {
         sendResponse({ data: res });
       });
+      return true;
+    }
+
+    if (message.type === 'START_PICKER') {
+      startPicker();
+      sendResponse({ started: true });
+      return;
+    }
+
+    if (message.type === 'CANCEL_PICKER') {
+      finishPicker(null);
+      sendResponse({ cancelled: true });
+      return;
+    }
+
+    if (message.type === 'UNPIN_QUESTION') {
+      unpinQuestion();
+      checkAndSendQuestion(true).then(() => sendResponse({ unpinned: true }));
       return true;
     }
   });

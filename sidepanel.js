@@ -1,7 +1,8 @@
 /**
  * Question Helper - Side Panel Script
  * Renders the detected question and the tutoring conversation, streams tutor replies
- * from the background worker, and sends step / attempt requests.
+ * from the background worker, and sends step / attempt requests. Also lets the student
+ * choose which question on the page to work on.
  */
 
 // DOM Elements
@@ -45,8 +46,11 @@ const btnCheckAttempt = document.getElementById('btnCheckAttempt');
 const btnCancel = document.getElementById('btnCancel');
 const stepProgress = document.getElementById('stepProgress');
 const stepCaption = document.getElementById('stepCaption');
+const btnPickQuestion = document.getElementById('btnPickQuestion');
+const btnUnpin = document.getElementById('btnUnpin');
 
 const TOTAL_STEPS = 3;
+let picking = false;
 const progressStats = document.getElementById('progressStats');
 
 // State
@@ -224,6 +228,7 @@ function updateStatusUI(state) {
  * Update Question Card
  */
 function updateQuestionUI(question) {
+  btnUnpin.classList.toggle('hidden', !question?.picked);
   if (!hasQuestion(question)) {
     emptyQuestionState.classList.remove('hidden');
     detectedQuestionContent.classList.add('hidden');
@@ -245,8 +250,8 @@ function updateQuestionUI(question) {
     if (question.source !== 'image') questionTextEl.textContent = '(No question stem found)';
   }
 
-  // Tags
-  if (question.selectorUsed) {
+  // Tags (a picked question shows the 📌 tag instead)
+  if (question.selectorUsed && !question.picked) {
     selectorTag.textContent = question.selectorUsed.replace('Heuristic: ', '');
     selectorTag.classList.remove('hidden');
   } else {
@@ -444,6 +449,54 @@ function rereadActiveTab() {
   });
 }
 
+// --- Choosing a question on the page ---
+
+function sendToActiveTab(msg, callback) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) return callback && callback(false);
+    try {
+      chrome.tabs.sendMessage(tabs[0].id, msg, (response) => {
+        const ok = !chrome.runtime.lastError;
+        if (callback) callback(ok, response);
+      });
+    } catch (_) {
+      if (callback) callback(false);
+    }
+  });
+}
+
+const PAGE_UNREACHABLE = "Can't read this page. If you just installed or reloaded Question Helper, refresh the page and try again.";
+
+function showPanelError(text) {
+  errorMessage.textContent = text;
+  errorBanner.classList.remove('hidden');
+}
+
+function setPicking(on) {
+  picking = on;
+  btnPickQuestion.classList.toggle('active', on);
+  btnPickQuestion.title = on ? 'Cancel choosing a question' : 'Choose a question on the page';
+}
+
+btnPickQuestion.addEventListener('click', () => {
+  if (picking) {
+    sendToActiveTab({ type: 'CANCEL_PICKER' });
+    setPicking(false);
+    return;
+  }
+  sendToActiveTab({ type: 'START_PICKER' }, (ok) => {
+    if (ok) {
+      setPicking(true);
+    } else {
+      showPanelError(PAGE_UNREACHABLE);
+    }
+  });
+});
+
+btnUnpin.addEventListener('click', () => {
+  sendToActiveTab({ type: 'UNPIN_QUESTION' });
+});
+
 // --- Event Listeners ---
 
 btnNextStep.addEventListener('click', () => {
@@ -629,7 +682,10 @@ setupExpandToggle(document.getElementById('answerCard'), document.getElementById
 
 // Listen to Background Messages
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'STATUS_CHANGE') {
+  if (message.type === 'PICKER_ENDED') {
+    setPicking(false);
+    if (message.error) showPanelError(message.error);
+  } else if (message.type === 'STATUS_CHANGE') {
     applyState(message.state);
   } else if (message.type === 'STREAM_CHUNK') {
     if (message.requestId !== currentRequestId || !currentState) return;

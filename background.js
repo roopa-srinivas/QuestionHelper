@@ -933,7 +933,8 @@ async function handleMessage(message, sendResponse) {
 
   switch (message.type) {
     case 'QUESTION_DETECTED': {
-      const qData = message.data;
+      // picked: the student chose this question on the page, so it stays until they unpin it
+      const qData = { ...message.data, picked: !!message.picked };
       // Keep an image/screenshot question until the student explicitly re-reads the page
       const pinnedImageQuestion = latestState.question?.source === 'image' && !message.forced;
       if (pinnedImageQuestion) {

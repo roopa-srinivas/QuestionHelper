@@ -238,7 +238,19 @@ body {
 .card-tags {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+/* Many tags + buttons wrap to a second line instead of overflowing the narrow panel */
+.card-header {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.card-tags .tag {
+  white-space: nowrap;
 }
 
 .card-actions {
@@ -266,6 +278,24 @@ body {
 .tag.model-tag {
   background-color: var(--accent-light);
   color: var(--accent-text);
+}
+
+.tag.picked-tag {
+  background-color: var(--accent-light);
+  color: var(--accent-text);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tag.picked-tag:hover {
+  background-color: #e0e7ff;
+}
+
+.icon-btn.active {
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
 }
 
 /* Step progress under the composer buttons */

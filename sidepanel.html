@@ -78,6 +78,17 @@
             <span id="blankInputsBadge" class="tag fill-blank-tag hidden">✏️ Fill-in Blank</span>
             <span id="selectorTag" class="tag hidden">Heuristic</span>
             <span id="visualTag" class="tag visual hidden">Canvas/Image</span>
+            <button id="btnUnpin" class="tag picked-tag hidden" title="You chose this question. Click to go back to following the page automatically.">📌 Your pick ✕</button>
+            <button id="btnPickQuestion" class="icon-btn small" title="Choose a question on the page">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="8"></circle>
+                <circle cx="12" cy="12" r="3"></circle>
+                <line x1="12" y1="1" x2="12" y2="4"></line>
+                <line x1="12" y1="20" x2="12" y2="23"></line>
+                <line x1="1" y1="12" x2="4" y2="12"></line>
+                <line x1="20" y1="12" x2="23" y2="12"></line>
+              </svg>
+            </button>
             <button id="btnRereadPage" class="icon-btn small" title="Re-read the question from the page">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10"></polyline>
@@ -98,7 +109,7 @@
           <div id="emptyQuestionState" class="empty-state">
             <div class="empty-icon">🔍</div>
             <p class="empty-title">Waiting for Question...</p>
-            <p class="empty-desc">Open a practice question, or use <strong>Capture Tab</strong> / upload an image if the question is a picture or inside a canvas.</p>
+            <p class="empty-desc">Open a practice question, or click <strong>🎯</strong> above to choose one on the page. Use <strong>Capture Tab</strong> / upload an image if the question is a picture or inside a canvas.</p>
           </div>
           <div id="detectedQuestionContent" class="question-content hidden">
             <div id="questionText" class="question-text markdown-body"></div>
