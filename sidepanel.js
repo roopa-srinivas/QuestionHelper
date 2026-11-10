@@ -48,6 +48,15 @@ const stepProgress = document.getElementById('stepProgress');
 const stepCaption = document.getElementById('stepCaption');
 const btnPickQuestion = document.getElementById('btnPickQuestion');
 const btnUnpin = document.getElementById('btnUnpin');
+const btnPasteQuestion = document.getElementById('btnPasteQuestion');
+const pasteBox = document.getElementById('pasteBox');
+const pasteInput = document.getElementById('pasteInput');
+const pasteImagesEl = document.getElementById('pasteImages');
+const btnUsePaste = document.getElementById('btnUsePaste');
+const btnCancelPaste = document.getElementById('btnCancelPaste');
+
+const MAX_PASTED_IMAGES = 8;
+let pastedImages = []; // { dataUrl } for pasted files, { src } for images in pasted web content
 
 const TOTAL_STEPS = 3;
 let picking = false;
@@ -229,6 +238,7 @@ function updateStatusUI(state) {
  */
 function updateQuestionUI(question) {
   btnUnpin.classList.toggle('hidden', !question?.picked);
+  btnUnpin.textContent = { 'Pasted by you': '📌 Pasted ✕' }[question?.selectorUsed] || '📌 Your pick ✕';
   if (!hasQuestion(question)) {
     emptyQuestionState.classList.remove('hidden');
     detectedQuestionContent.classList.add('hidden');
@@ -467,6 +477,126 @@ function sendToActiveTab(msg, callback) {
 
 const PAGE_UNREACHABLE = "Can't read this page. If you just installed or reloaded Question Helper, refresh the page and try again.";
 
+// --- Paste the question yourself (fallback) ---
+
+function renderPastedImages() {
+  pasteImagesEl.textContent = '';
+  pastedImages.forEach((img, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'paste-thumb';
+    const el = document.createElement('img');
+    // A copied web image that can't be loaded (expired link, sign-in needed) is dropped, not shown broken
+    el.addEventListener('error', () => {
+      pastedImages = pastedImages.filter(p => p !== img);
+      renderPastedImages();
+    }, { once: true });
+    el.src = img.dataUrl || img.src;
+    el.alt = `Pasted image ${idx + 1}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.title = 'Remove this image';
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      pastedImages.splice(idx, 1);
+      renderPastedImages();
+    });
+    wrap.append(el, remove);
+    pasteImagesEl.appendChild(wrap);
+  });
+  pasteImagesEl.classList.toggle('hidden', pastedImages.length === 0);
+  updatePasteButton();
+}
+
+function updatePasteButton() {
+  btnUsePaste.disabled = !pasteInput.value.trim() && pastedImages.length === 0;
+}
+
+function openPasteBox() {
+  // Editing a question that was pasted earlier starts from what was pasted
+  if (!pasteInput.value && currentState?.question?.source === 'pasted') {
+    pasteInput.value = currentState.question.questionText || '';
+  }
+  pasteBox.classList.remove('hidden');
+  updatePasteButton();
+  pasteInput.focus();
+}
+
+function closePasteBox() {
+  pasteBox.classList.add('hidden');
+  pasteInput.value = '';
+  pastedImages = [];
+  renderPastedImages();
+}
+
+function addPastedImage(img) {
+  if (pastedImages.length >= MAX_PASTED_IMAGES) return;
+  const key = img.dataUrl || img.src;
+  if (pastedImages.some(p => (p.dataUrl || p.src) === key)) return;
+  pastedImages.push(img);
+  renderPastedImages();
+}
+
+btnPasteQuestion.addEventListener('click', () => {
+  if (pasteBox.classList.contains('hidden')) openPasteBox();
+  else closePasteBox();
+});
+btnCancelPaste.addEventListener('click', closePasteBox);
+pasteInput.addEventListener('input', updatePasteButton);
+pasteInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !btnUsePaste.disabled) {
+    e.preventDefault();
+    btnUsePaste.click();
+  }
+});
+
+// Text pastes into the box as usual; pasted screenshots/files and images in copied web content are attached
+pasteInput.addEventListener('paste', (e) => {
+  const data = e.clipboardData;
+  if (!data) return;
+  for (const item of data.items || []) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = () => addPastedImage({ dataUrl: reader.result });
+      reader.readAsDataURL(file);
+    }
+  }
+  const html = data.getData('text/html');
+  if (html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('img[src]').forEach(img => {
+      const src = img.getAttribute('src');
+      if (/^data:image\//.test(src)) addPastedImage({ dataUrl: src });
+      else if (/^https?:\/\//.test(src)) addPastedImage({ src });
+    });
+  }
+  // A pasted image with no text: don't insert the file name as text
+  if (!data.getData('text/plain') && Array.from(data.items || []).some(i => i.kind === 'file')) {
+    e.preventDefault();
+  }
+});
+
+btnUsePaste.addEventListener('click', () => {
+  const text = pasteInput.value.trim();
+  const images = pastedImages.map((img) => {
+    if (img.dataUrl) {
+      const mimeMatch = img.dataUrl.match(/^data:([^;]+);/);
+      return { mimeType: mimeMatch ? mimeMatch[1] : 'image/png', data: img.dataUrl.split(',')[1], type: 'paste', description: 'Pasted image' };
+    }
+    return { src: img.src, mimeType: 'image/jpeg', type: 'image_url', description: 'Pasted image' };
+  });
+  if (!text && images.length === 0) return;
+  safeSendMessage({ type: 'USE_PASTED_QUESTION', text, images }, (res) => {
+    if (res && res.ok) {
+      closePasteBox();
+      errorBanner.classList.add('hidden');
+    } else {
+      showPanelError("Couldn't use the pasted question. Try again.");
+    }
+  });
+});
+
 function showPanelError(text) {
   errorMessage.textContent = text;
   errorBanner.classList.remove('hidden');
@@ -547,6 +677,8 @@ fileInputImage.addEventListener('change', () => {
 
 // Clipboard Paste Image Support: Cmd+V / Ctrl+V in Side Panel (text pastes into the answer box as usual)
 window.addEventListener('paste', (e) => {
+  // The paste box handles its own pastes (images there are attached to the pasted question)
+  if (e.target && e.target.closest && e.target.closest('#pasteBox')) return;
   const clipboardData = e.clipboardData || window.clipboardData;
   if (!clipboardData || !clipboardData.items) return;
 

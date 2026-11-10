@@ -10,7 +10,11 @@ It's built for practice and homework you're allowed to get help on. Don't use it
 
 ## 🎓 How Tutoring Works
 
-1. **🎯 Choose the question** (optional): The panel follows the question you're looking at. To lock onto a specific one, click 🎯, then click the question on the page (<kbd>↑</kbd>/<kbd>↓</kbd> to select more or less, <kbd>Esc</kbd> to cancel). It stays put while you scroll; click **📌 Your pick ✕** to go back to automatic.
+1. **Choose the question** (optional): The panel follows the question you're looking at. To lock onto a specific one, either:
+   - **🎯 Pick it**: click 🎯, then click the question on the page (<kbd>↑</kbd>/<kbd>↓</kbd> to select more or less, <kbd>Esc</kbd> to cancel).
+   - **📋 Paste it** (fallback): if the page can't be read (PDFs, Google Docs, unusual quiz apps), click 📋 and paste the question into the box. Pasted screenshots and images in copied web content are attached too.
+
+   Either way it stays put while you scroll; click **📌 ✕** to go back to automatic.
 2. **👣 Step 1 → Step 2 → Step 3: Answer**: One click per step, and each builds on the last.
    - **Step 1** names the concept the question tests and the first move: what to identify, set up or recall.
    - **Step 2** works through the main reasoning (and rules out wrong choices), stopping one move short of the answer.
@@ -45,7 +49,7 @@ Scanned PDFs (pictures of pages) have no text layer, so they can't be read. Cour
   - **Anthropic Claude**: Claude Opus 5.5 (default), Sonnet 5.5 or Haiku 5.5 with your Anthropic Console key.
 - **Grounded in Your Course**: Upload textbook chapters or notes and the tutor uses their definitions and cites their pages (see [Course Materials](#-course-materials)).
 - **Automatic Question Detection**: A debounced (~400ms) `MutationObserver` picks up the new question when you click **Next** or navigate.
-- **Choose the Question**: Click 🎯 and then the question on the page. It stays pinned while you scroll and answer other questions.
+- **Choose the Question**: Click 🎯 and then the question on the page, or click 📋 and paste it in. It stays pinned while you scroll and answer other questions.
 - **Diagrams**: Inline SVG diagrams in a 🎯-picked question are converted to images (with the page's colors and fonts) so the model can see them.
 - **Streaming Replies**: The tutor's replies stream in as they're written.
 - **Images & Diagrams**:
