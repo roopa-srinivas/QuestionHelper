@@ -1,0 +1,2 @@
+pdf.js 6.4.299 (pdfjs-dist, build/pdf.min.mjs and build/pdf.worker.min.mjs), Apache-2.0, https://github.com/mozilla/pdf.js
+Used by materials.js on the Settings page to read the text of uploaded PDFs.

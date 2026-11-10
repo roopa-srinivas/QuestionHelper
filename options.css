@@ -558,6 +558,72 @@ textarea {
   background-color: var(--error-bg);
 }
 
+/* Course Materials */
+input[type="file"] {
+  width: 100%;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 0;
+}
+
+.materials-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.materials-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.materials-course h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.material-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+}
+
+.material-row .material-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.material-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .selector-inputs,
+  .material-row {
+    flex-wrap: wrap;
+  }
+  .material-row .material-title {
+    flex-basis: 100%;
+  }
+}
+
 /* Cache Section */
 .cache-status-row {
   display: flex;

@@ -59,6 +59,17 @@
 
     <!-- Main Content Area -->
     <main class="panel-body">
+      <!-- Course materials being studied -->
+      <details class="study-picker" id="studyPicker">
+        <summary>
+          <span class="study-icon" aria-hidden="true">📚</span>
+          <span class="study-label">Studying</span>
+          <span class="study-summary" id="studySummary">No course materials</span>
+        </summary>
+        <div class="study-list" id="studyList"></div>
+        <button id="btnManageMaterials" class="link-btn">Add or manage course materials in Settings</button>
+      </details>
+
       <!-- Section 1: Detected Question -->
       <section class="card question-card" id="questionCard">
         <div class="card-header">
@@ -102,6 +113,7 @@
         <div class="card-header">
           <span class="card-label" id="answerCardLabel">TUTOR</span>
           <div class="card-tags">
+            <span id="materialsBadge" class="tag materials-tag hidden"></span>
             <span id="modelBadge" class="tag model-tag">gemini-2.5-flash</span>
             <button id="btnResetConversation" class="icon-btn small hidden" title="Start this question over">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">

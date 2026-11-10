@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Question Helper",
-  "version": "2.0.0",
-  "description": "AI study tutor in the Chrome Side Panel: step-by-step hints and feedback on your own attempts, powered by Gemini or Claude.",
+  "version": "2.1.0",
+  "description": "AI study tutor in the Chrome Side Panel: step-by-step hints and feedback on your own attempts, grounded in your course materials, powered by Gemini or Claude.",
   "permissions": [
     "sidePanel",
     "storage",
     "activeTab",
-    "tabs"
+    "tabs",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>",
