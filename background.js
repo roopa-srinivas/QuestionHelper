@@ -1,7 +1,7 @@
 /**
  * Question Helper - Background Service Worker (Manifest V3)
- * Runs a Socratic tutoring session for the detected question: progressive hints,
- * feedback on the student's attempts, and a full worked solution only after an attempt.
+ * Runs a tutoring session for the detected question: three steps, one per click
+ * (step 3 is the worked answer), plus feedback on the student's own attempts.
  * Supports Google Gemini and Anthropic Claude with SSE streaming.
  */
 
@@ -9,34 +9,42 @@ import { buildMaterialsContext, citeName } from './lib/course-materials.js';
 
 const TUTOR_SYSTEM_PROMPT = `You are a patient, encouraging study tutor. A student is working through a practice problem and wants to learn how to solve it themselves. Your job is to build their understanding, not to hand over answers.
 
-Each student message is tagged with what they want:
+Each student message is tagged with what they want. The student works through the problem in three steps, asking for one step at a time; each step builds on the steps (and any attempts) earlier in this conversation and never repeats them.
 
-[HINT REQUEST]
-- Give exactly one hint that builds on any hints already given in this conversation.
-- First hint: name the concept or skill the question is testing, and ask a guiding question that points toward the first step.
-- Later hints get progressively more specific: the relevant definition, formula or principle; how to set up the first step; which options can be ruled out and why.
-- Never complete the final step, and never state the final answer, the correct option letter, or the final numeric value.
+[STEP 1 OF 3]
+- Start with "**Step 1: <short title>**".
+- Name the concept or skill the question is testing and give the first move: what to identify, set up or recall (the relevant definition, formula or rule), and why it applies here. Then stop.
+- Do not go further, and do not state the final answer, the correct option letter, or the final value.
+
+[STEP 2 OF 3]
+- Start with "**Step 2: <short title>**".
+- Carry the reasoning from step 1 through the main work, stopping just before the final answer so that one move is left for the student. For multiple choice, rule out the options that can be ruled out and say why.
+- Still do not state the final answer, the correct option letter, or the final value.
+
+[STEP 3 OF 3: ANSWER]
+- Start with "**Step 3: Answer**".
+- Finish the reasoning from step 2 and give the final answer in bold (for multiple choice, the option letter and its text).
+- Then add "**Key takeaway:**" (one sentence) and "**Common mistake:**" (one sentence).
 
 [ATTEMPT]
 - If the attempt is correct: confirm it, briefly explain why it works, and name the key idea to remember.
-- If it is wrong or incomplete: say so kindly, point to the specific step or misconception that went wrong, and ask a question that helps them fix it. Do not reveal the correct answer.
+- If it is wrong or incomplete: say so kindly, point to the specific step or misconception that went wrong, and ask a question that helps them fix it. Do not reveal the correct answer unless step 3 has already been given.
 - If they gave an answer with no reasoning, you may ask them how they got it.
 
-[SOLUTION REQUEST] (only sent after the student has made at least one attempt)
-- Give a complete worked solution, step by step, ending with the final answer in bold.
-- Then add "**Key takeaway:**" (one sentence) and "**Common mistake:**" (one sentence).
-
 General rules:
-- Keep hints and feedback short, about 2-5 sentences. Only the full solution may be longer.
+- Keep steps 1 and 2 and feedback on attempts short, about 2-6 sentences. Step 3 may be longer.
 - Read the question exactly as given, including negative phrasing (NOT, EXCEPT, LEAST), units, and constraints.
 - If an image is attached, read the diagram, plot or figure carefully.
 - If the question text looks garbled or incomplete, say what you can see and ask the student to paste or screenshot the full question.
 - Use Markdown. Write math inline with $...$ and code in backticks.`;
 
+const TOTAL_STEPS = 3;
+
 const STUDENT_PROMPTS = {
-  hint: '[HINT REQUEST] Could I get a hint?',
-  attempt: (text) => `[ATTEMPT]\n${text}`,
-  solution: "[SOLUTION REQUEST] I've made my attempt. Please walk me through the full solution."
+  step: (n) => (n < TOTAL_STEPS
+    ? `[STEP ${n} OF ${TOTAL_STEPS}] Could I get step ${n}?`
+    : `[STEP ${n} OF ${TOTAL_STEPS}: ANSWER] Please finish it and give me the answer.`),
+  attempt: (text) => `[ATTEMPT]\n${text}`
 };
 
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
@@ -62,7 +70,7 @@ let stateLoaded = null;
 function emptyState(question = null, prev = null) {
   return {
     question,
-    turns: [], // { role: 'student' | 'tutor', kind: 'hint' | 'attempt' | 'solution' | 'reply', text }
+    turns: [], // { role: 'student' | 'tutor', kind: 'step' | 'attempt' | 'reply', step, text }
     streamingText: '',
     status: 'idle', // 'idle' | 'thinking' | 'streaming' | 'error'
     error: null,
@@ -565,7 +573,7 @@ async function streamAnthropic(apiKey, model, systemParts, conversation, control
     system: systemParts.length === 1
       ? systemParts[0]
       // Cache the tutor rules + course materials. Students often take more than 5 minutes
-      // between hints, so use the 1-hour cache rather than the 5-minute default.
+      // between steps, so use the 1-hour cache rather than the 5-minute default.
       : systemParts.map((text, idx) => (idx === systemParts.length - 1
         ? { type: 'text', text, cache_control: { type: 'ephemeral', ttl: '1h' } }
         : { type: 'text', text })),
@@ -693,7 +701,7 @@ function stepsTaken(turns) {
 
 /**
  * Add a student turn and stream the tutor's reply.
- * kind: 'hint' | 'attempt' | 'solution'
+ * kind: 'step' (the next of steps 1-3, where step 3 is the answer) | 'attempt'
  */
 async function runTutorTurn(kind, attemptText = '') {
   if (!latestState.question) {
@@ -703,12 +711,9 @@ async function runTutorTurn(kind, attemptText = '') {
   }
   if (isBusy()) return;
 
-  const hasAttempt = latestState.turns.some(t => t.kind === 'attempt');
-  if (kind === 'solution' && !hasAttempt) {
-    latestState.error = 'Give it a try first: type your answer or reasoning, then the full solution unlocks.';
-    broadcastState();
-    return;
-  }
+  // Steps go 1 -> 2 -> 3 (the answer), one per click
+  const step = kind === 'step' ? stepsTaken(latestState.turns) + 1 : null;
+  if (step !== null && step > TOTAL_STEPS) return;
 
   const requestId = ++currentRequestId;
   cancelInFlightRequest();
@@ -718,8 +723,9 @@ async function runTutorTurn(kind, attemptText = '') {
   const studentTurn = {
     role: 'student',
     kind,
+    step,
     text: kind === 'attempt' ? attemptText : '',
-    apiText: kind === 'attempt' ? STUDENT_PROMPTS.attempt(attemptText) : STUDENT_PROMPTS[kind]
+    apiText: kind === 'attempt' ? STUDENT_PROMPTS.attempt(attemptText) : STUDENT_PROMPTS.step(step)
   };
   latestState.turns.push(studentTurn);
   Object.assign(latestState, { status: 'thinking', error: null, streamingText: '', requestId });
@@ -902,12 +908,12 @@ function requestQuestionFromActiveTab() {
   });
 }
 
-async function startHintForCurrentQuestion() {
+async function startNextStep() {
   if (!latestState.question) {
     const question = await requestQuestionFromActiveTab();
     if (question) switchToQuestion(question);
   }
-  runTutorTurn('hint');
+  runTutorTurn('step');
 }
 
 function imageQuestion(image, label) {
@@ -944,8 +950,8 @@ async function handleMessage(message, sendResponse) {
       return;
     }
 
-    case 'TUTOR_HINT':
-      startHintForCurrentQuestion();
+    case 'TUTOR_NEXT_STEP':
+      startNextStep();
       sendResponse({ status: 'started' });
       return;
 
@@ -955,11 +961,6 @@ async function handleMessage(message, sendResponse) {
       sendResponse({ status: text ? 'started' : 'empty' });
       return;
     }
-
-    case 'TUTOR_SOLUTION':
-      runTutorTurn('solution');
-      sendResponse({ status: 'started' });
-      return;
 
     case 'TUTOR_RESET':
       resetConversation();
@@ -1040,6 +1041,6 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   }
   if (command === 'get_hint') {
     await ensureStateLoaded();
-    startHintForCurrentQuestion();
+    startNextStep();
   }
 });

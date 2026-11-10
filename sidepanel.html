@@ -137,7 +137,7 @@
           <div id="emptyAnswerState" class="empty-state">
             <div class="empty-icon">💡</div>
             <p class="empty-title">Work through it together</p>
-            <p class="empty-desc" id="emptyAnswerDesc">Ask for a hint, or type your answer below and the tutor will tell you if you're on the right track.</p>
+            <p class="empty-desc" id="emptyAnswerDesc">Go one step at a time (step 3 is the answer), or type your answer below and the tutor will tell you if you're on the right track.</p>
           </div>
 
           <!-- Conversation -->
@@ -159,18 +159,21 @@
         <label for="attemptInput" class="composer-label">Your answer or reasoning</label>
         <textarea id="attemptInput" class="attempt-input" rows="3" placeholder="e.g. I think it's B because... (Cmd/Ctrl+Enter to send)"></textarea>
         <div class="composer-actions">
-          <button id="btnHint" class="secondary-btn">💡 Hint</button>
+          <button id="btnNextStep" class="secondary-btn">👣 Step 1</button>
           <button id="btnCheckAttempt" class="primary-btn" disabled>Check my answer</button>
           <button id="btnCancel" class="secondary-btn hidden">Cancel</button>
         </div>
-        <button id="btnSolution" class="link-btn" disabled>🔒 Full solution unlocks after your first attempt</button>
+        <div class="step-progress" id="stepProgress">
+          <div class="step-segments" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="step-caption" id="stepCaption">3 steps · step 3 is the answer</span>
+        </div>
       </section>
     </main>
 
     <!-- Footer -->
     <footer class="panel-footer">
       <div class="shortcut-tip">
-        <span><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> for a hint</span>
+        <span><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> for the next step</span>
       </div>
       <div class="progress-stats" id="progressStats"></div>
     </footer>
