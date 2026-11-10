@@ -1648,7 +1648,7 @@
     safeSendMessage({
       type: 'PICKER_ENDED',
       picked: ok,
-      error: ok ? null : "Couldn't read a question there. Try clicking closer to the question's text, or press ↑ to select more."
+      error: ok ? null : "Couldn't read a question there. Try clicking closer to the question's text, press ↑ to select more, or click 📋 to paste it in."
     });
   }
 

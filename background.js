@@ -705,7 +705,7 @@ function stepsTaken(turns) {
  */
 async function runTutorTurn(kind, attemptText = '') {
   if (!latestState.question) {
-    latestState.error = 'No question detected yet. Open a practice question, or use Capture Tab / Upload Image.';
+    latestState.error = 'No question detected yet. Open a practice question, or click 📋 to paste it in.';
     broadcastState();
     return;
   }
@@ -935,8 +935,8 @@ async function handleMessage(message, sendResponse) {
     case 'QUESTION_DETECTED': {
       // picked: the student chose this question on the page, so it stays until they unpin it
       const qData = { ...message.data, picked: !!message.picked };
-      // Keep an image/screenshot question until the student explicitly re-reads the page
-      const pinnedImageQuestion = latestState.question?.source === 'image' && !message.forced;
+      // Keep an image/screenshot question (or a pasted one) until the student explicitly re-reads the page
+      const pinnedImageQuestion = ['image', 'pasted'].includes(latestState.question?.source) && !message.forced;
       if (pinnedImageQuestion) {
         sendResponse({ received: true, preserved: true });
       } else if (isSameQuestion(qData, latestState.question)) {
@@ -948,6 +948,29 @@ async function handleMessage(message, sendResponse) {
         switchToQuestion(qData);
         sendResponse({ received: true });
       }
+      return;
+    }
+
+    case 'USE_PASTED_QUESTION': {
+      // The student pasted the question into the side panel (the fallback when reading the page fails)
+      const text = (message.text || '').trim();
+      const images = (message.images || []).slice(0, 8);
+      if (!text && images.length === 0) {
+        sendResponse({ ok: false });
+        return;
+      }
+      switchToQuestion({
+        questionText: text,
+        options: [],
+        optionsText: '',
+        fullText: text || '[Pasted image question]',
+        images,
+        hasVisualMedia: images.length > 0,
+        source: 'pasted',
+        selectorUsed: 'Pasted by you',
+        picked: true
+      });
+      sendResponse({ ok: true });
       return;
     }
 
@@ -1012,7 +1035,7 @@ async function handleMessage(message, sendResponse) {
 
     case 'NO_QUESTION_FOUND':
       if (latestState.question?.source !== 'image' && !isBusy()) {
-        latestState.error = 'No question found on this page. Try Capture Tab, upload an image, or add a CSS selector in Settings.';
+        latestState.error = 'No question found on this page. Try Capture Tab, or click 📋 to paste it in.';
         broadcastState();
       }
       sendResponse({ received: true });

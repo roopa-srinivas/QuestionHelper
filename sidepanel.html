@@ -70,6 +70,21 @@
         <button id="btnManageMaterials" class="link-btn">Add or manage course materials in Settings</button>
       </details>
 
+      <!-- Paste the question yourself: the fallback when reading the page doesn't work -->
+      <section class="card paste-card hidden" id="pasteBox">
+        <div class="card-header">
+          <span class="card-label">PASTE THE QUESTION</span>
+        </div>
+        <div class="paste-body">
+          <textarea id="pasteInput" class="attempt-input" rows="6" placeholder="Copy the question from the page (Cmd/Ctrl+C) and paste it here. Pasted screenshots and images are attached too."></textarea>
+          <div id="pasteImages" class="paste-images hidden"></div>
+          <div class="paste-actions">
+            <button id="btnCancelPaste" class="secondary-btn">Cancel</button>
+            <button id="btnUsePaste" class="primary-btn" disabled>Use this question</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Section 1: Detected Question -->
       <section class="card question-card" id="questionCard">
         <div class="card-header">
@@ -79,6 +94,12 @@
             <span id="selectorTag" class="tag hidden">Heuristic</span>
             <span id="visualTag" class="tag visual hidden">Canvas/Image</span>
             <button id="btnUnpin" class="tag picked-tag hidden" title="You chose this question. Click to go back to following the page automatically.">📌 Your pick ✕</button>
+            <button id="btnPasteQuestion" class="icon-btn small" title="Paste the question in yourself">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="8" y="2" width="8" height="4" rx="1"></rect>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              </svg>
+            </button>
             <button id="btnPickQuestion" class="icon-btn small" title="Choose a question on the page">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="8"></circle>
@@ -109,7 +130,7 @@
           <div id="emptyQuestionState" class="empty-state">
             <div class="empty-icon">🔍</div>
             <p class="empty-title">Waiting for Question...</p>
-            <p class="empty-desc">Open a practice question, or click <strong>🎯</strong> above to choose one on the page. Use <strong>Capture Tab</strong> / upload an image if the question is a picture or inside a canvas.</p>
+            <p class="empty-desc">Open a practice question, or click <strong>🎯</strong> above to choose one on the page. If that doesn't work, click <strong>📋</strong> and paste the question in.</p>
           </div>
           <div id="detectedQuestionContent" class="question-content hidden">
             <div id="questionText" class="question-text markdown-body"></div>
