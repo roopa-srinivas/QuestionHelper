@@ -11,6 +11,7 @@ It's built for practice and homework you're allowed to get help on. Don't use it
 ## 🎓 How Tutoring Works
 
 1. **Choose the question** (optional): The panel follows the question you're looking at. To lock onto a specific one, either:
+   - **Select it**: drag across the question, then click **T** on the question card or right-click → **Help with this selection** (the right-click option also works in Chrome's PDF viewer). The tutor gets exactly the text you selected, plus any images, canvases and SVG diagrams inside the selection (up to 8). It also works when the quiz is inside an embedded frame (as in Canvas New Quizzes), inside web components, in a text box, or on pages that clear your selection when you click the side panel.
    - **🎯 Pick it**: click 🎯, then click the question on the page (<kbd>↑</kbd>/<kbd>↓</kbd> to select more or less, <kbd>Esc</kbd> to cancel).
    - **📋 Paste it** (fallback): if the page can't be read (PDFs, Google Docs, unusual quiz apps), click 📋 and paste the question into the box. Pasted screenshots and images in copied web content are attached too.
 
@@ -49,8 +50,8 @@ Scanned PDFs (pictures of pages) have no text layer, so they can't be read. Cour
   - **Anthropic Claude**: Claude Opus 5.5 (default), Sonnet 5.5 or Haiku 5.5 with your Anthropic Console key.
 - **Grounded in Your Course**: Upload textbook chapters or notes and the tutor uses their definitions and cites their pages (see [Course Materials](#-course-materials)).
 - **Automatic Question Detection**: A debounced (~400ms) `MutationObserver` picks up the new question when you click **Next** or navigate.
-- **Choose the Question**: Click 🎯 and then the question on the page, or click 📋 and paste it in. It stays pinned while you scroll and answer other questions.
-- **Diagrams**: Inline SVG diagrams in a 🎯-picked question are converted to images (with the page's colors and fonts) so the model can see them.
+- **Choose the Question**: Select a question's text and click **T** or right-click → **Help with this selection**, or click 🎯 and then the question. It stays pinned while you scroll and answer other questions.
+- **Formatting & Diagrams**: For detected and 🎯-picked questions, LaTeX from KaTeX/MathJax/MathML, code blocks with their language, tables, lists, sub/superscripts and fill-in blanks are kept as Markdown (a selection is used as plain text). Inline SVG diagrams are converted to images (with the page's colors and fonts) so the model can see them.
 - **Streaming Replies**: The tutor's replies stream in as they're written.
 - **Images & Diagrams**:
   - Extracts `<canvas>` graphs, diagrams and `<img>` figures from the question and sends them to the vision model.

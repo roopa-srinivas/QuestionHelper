@@ -66,6 +66,8 @@ let latestState = emptyState();
 // Previous page questions' conversations, keyed by question fingerprint, so going back restores them
 let savedSessions = {};
 let stateLoaded = null;
+// Which tab/frame the picked (📌) question came from
+let pickedFrom = null;
 
 function emptyState(question = null, prev = null) {
   return {
@@ -89,7 +91,20 @@ chrome.runtime.onInstalled.addListener(() => {
     });
   }
   chrome.storage.local.remove(['systemPrompt', 'autoAnswer', 'answerCache']);
+
+  // Right-click a selection -> work on exactly that text (with its images and formatting)
+  if (chrome.contextMenus) {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: SELECTION_MENU_ID,
+        title: 'Help with this selection',
+        contexts: ['selection']
+      });
+    });
+  }
 });
+
+const SELECTION_MENU_ID = 'qh-use-selection';
 
 /**
  * The service worker is stopped after ~30s idle, which would wipe the conversation.
@@ -705,7 +720,7 @@ function stepsTaken(turns) {
  */
 async function runTutorTurn(kind, attemptText = '') {
   if (!latestState.question) {
-    latestState.error = 'No question detected yet. Open a practice question, or click 📋 to paste it in.';
+    latestState.error = 'No question detected yet. Open a practice question, select it and click T, or click 📋 to paste it in.';
     broadcastState();
     return;
   }
@@ -928,15 +943,22 @@ function imageQuestion(image, label) {
   };
 }
 
-async function handleMessage(message, sendResponse) {
+async function handleMessage(message, sendResponse, sender = {}) {
   await ensureStateLoaded();
 
   switch (message.type) {
     case 'QUESTION_DETECTED': {
       // picked: the student chose this question on the page, so it stays until they unpin it
       const qData = { ...message.data, picked: !!message.picked };
-      // Keep an image/screenshot question (or a pasted one) until the student explicitly re-reads the page
-      const pinnedImageQuestion = ['image', 'pasted'].includes(latestState.question?.source) && !message.forced;
+      const from = { tabId: sender.tab?.id, frameId: sender.frameId };
+      if (message.picked) pickedFrom = from;
+      // A picked question only gives way to its own frame (e.g. after that page navigates) or an explicit
+      // re-read; automatic detection in other frames or tabs leaves it alone
+      const pickedElsewhere = latestState.question?.picked && !message.forced && !message.picked &&
+        !(pickedFrom && pickedFrom.tabId === from.tabId && pickedFrom.frameId === from.frameId);
+      // Keep an image/screenshot question (or plain selected text from a frame, or a pasted one) until the student
+      // explicitly re-reads the page
+      const pinnedImageQuestion = (['image', 'selection-text', 'pasted'].includes(latestState.question?.source) && !message.forced) || pickedElsewhere;
       if (pinnedImageQuestion) {
         sendResponse({ received: true, preserved: true });
       } else if (isSameQuestion(qData, latestState.question)) {
@@ -959,6 +981,7 @@ async function handleMessage(message, sendResponse) {
         sendResponse({ ok: false });
         return;
       }
+      pickedFrom = null;
       switchToQuestion({
         questionText: text,
         options: [],
@@ -967,12 +990,28 @@ async function handleMessage(message, sendResponse) {
         images,
         hasVisualMedia: images.length > 0,
         source: 'pasted',
-        selectorUsed: 'Pasted by you',
+        selectorUsed: message.asSelection ? 'Your selection' : 'Pasted by you',
         picked: true
       });
       sendResponse({ ok: true });
       return;
     }
+
+    case 'USE_SELECTION_IN_TAB': {
+      const res = await useSelectionInTab(message.tabId);
+      sendResponse(res);
+      return;
+    }
+
+    case 'CLEAR_PICK':
+      // The student unpinned: automatic detection takes over again
+      pickedFrom = null;
+      if (latestState.question?.picked) {
+        latestState.question = { ...latestState.question, picked: false };
+        broadcastState();
+      }
+      sendResponse({ status: 'ok' });
+      return;
 
     case 'TUTOR_NEXT_STEP':
       startNextStep();
@@ -1035,7 +1074,7 @@ async function handleMessage(message, sendResponse) {
 
     case 'NO_QUESTION_FOUND':
       if (latestState.question?.source !== 'image' && !isBusy()) {
-        latestState.error = 'No question found on this page. Try Capture Tab, or click 📋 to paste it in.';
+        latestState.error = 'No question found on this page. Select the question and click T, or click 📋 to paste it in.';
         broadcastState();
       }
       sendResponse({ received: true });
@@ -1048,7 +1087,7 @@ async function handleMessage(message, sendResponse) {
 
 // --- Message Router ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message, sendResponse).catch((err) => {
+  handleMessage(message, sendResponse, sender).catch((err) => {
     console.warn('[QuestionHelper] Message handling error:', err);
     sendResponse({ error: err.message });
   });
@@ -1068,3 +1107,195 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
     startNextStep();
   }
 });
+
+/** A question made from plain selected text, when the page script can't read the selection itself. */
+function selectionTextQuestion(text) {
+  return {
+    questionText: text.trim(),
+    options: [],
+    fullText: text.trim(),
+    images: [],
+    source: 'selection-text',
+    selectorUsed: 'Your selection',
+    picked: true
+  };
+}
+
+/** Ask one frame's page script to use its selection. Resolves { unreachable: true } if no script answers. */
+function askFrameForSelection(tabId, frameId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: 'USE_SELECTION' }, { frameId }, (res) => {
+        resolve(chrome.runtime.lastError || !res ? { unreachable: true } : res);
+      });
+    } catch (_) {
+      resolve({ unreachable: true });
+    }
+  });
+}
+
+/**
+ * Read the selected text straight out of every frame in the tab. This needs no page script, so it works
+ * on pages opened before the extension was (re)loaded too. Frames the extension can't be injected into
+ * directly (about:blank, srcdoc and sandboxed same-origin frames) are read from their parent page.
+ * Throws if Chrome won't let extensions run on the page at all (its PDF viewer, chrome:// pages,
+ * the Web Store, local files without file access).
+ */
+async function readSelectedTextInFrames(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => {
+      const read = (doc) => {
+        const el = doc.activeElement;
+        try {
+          if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') && el.selectionEnd > el.selectionStart) {
+            return el.value.slice(el.selectionStart, el.selectionEnd);
+          }
+        } catch (_) {}
+        const sel = doc.getSelection ? doc.getSelection() : null;
+        return sel ? sel.toString() : '';
+      };
+      const texts = [];
+      const own = read(document);
+      if (own.trim()) texts.push(own);
+      const walk = (doc, depth) => {
+        if (depth > 4) return;
+        doc.querySelectorAll('iframe, frame').forEach((frame) => {
+          let child = null;
+          try { child = frame.contentDocument; } catch (_) {}
+          if (!child) return; // another origin: reached by its own injection, or off limits
+          const text = read(child);
+          if (text.trim()) texts.push(text);
+          walk(child, depth + 1);
+        });
+      };
+      walk(document, 0);
+      const pdfViewers = document.querySelectorAll(
+        'embed[type="application/pdf"], object[type="application/pdf"], embed[src*=".pdf" i], iframe[src*=".pdf" i], object[data*=".pdf" i]'
+      ).length;
+      return { texts, pdfViewers, url: location.href };
+    }
+  });
+
+  const found = [];
+  const seen = new Set();
+  let pdfViewers = 0;
+  for (const r of results) {
+    const info = r.result || {};
+    pdfViewers += info.pdfViewers || 0;
+    for (const raw of info.texts || []) {
+      const text = raw.trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        found.push({ frameId: r.frameId, text });
+      }
+    }
+  }
+  found.sort((a, b) => b.text.length - a.text.length);
+  console.info(`[QuestionHelper] Selection check: ${results.length} frame(s) read, ${found.length} with selected text, ${pdfViewers} embedded PDF viewer(s)`);
+  return { found, pdfViewers };
+}
+
+/** Why a page can't be read, for pages Chrome keeps extensions out of. */
+function unreadablePageMessage(url = '') {
+  if (/\.pdf($|[?#])/i.test(url) || url.startsWith('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai')) {
+    return "Chrome's PDF viewer doesn't let extensions read what you select. Right-click the selection → Help with this selection (that works in PDFs), or click 📋 and paste it in.";
+  }
+  if (url.startsWith('file:')) {
+    return 'To read files on your computer, turn on "Allow access to file URLs" for Question Helper in chrome://extensions, then refresh the page. Or click 📋 and paste the question in.';
+  }
+  if (/^(chrome|edge|about|devtools|view-source):/.test(url) || /chromewebstore\.google\.com|chrome\.google\.com\/webstore/.test(url)) {
+    return "Chrome doesn't let extensions read this page. Click 📋 and paste the question in.";
+  }
+  return null;
+}
+
+/**
+ * Use what the student selected in a tab as the question:
+ * 1. The page script in the frame holding the selection (loaded into it if needed) reads the selection
+ *    with its images and keeps it pinned.
+ * 2. If no page script can, the selected text read straight from the frames (or the context menu's
+ *    selectionText) is used as is.
+ */
+async function useSelectionInTab(tabId, frameIdHint, selectionTextHint = '') {
+  let found = [];
+  let pdfViewers = 0;
+  let scriptingFailed = false;
+  if (chrome.scripting) {
+    try {
+      ({ found, pdfViewers } = await readSelectedTextInFrames(tabId));
+    } catch (_) {
+      scriptingFailed = true;
+    }
+  }
+
+  const hinted = frameIdHint !== undefined && frameIdHint !== null ? [frameIdHint] : [];
+  const frameIds = [...new Set([...hinted, ...found.map(f => f.frameId), 0])];
+
+  let pageError = null;
+  if (!scriptingFailed) {
+    for (const frameId of frameIds) {
+      let res = await askFrameForSelection(tabId, frameId);
+      if (res.unreachable && chrome.scripting) {
+        try {
+          await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ['content.js'] });
+          res = await askFrameForSelection(tabId, frameId);
+        } catch (_) {}
+      }
+      if (res.ok) return res;
+      if (!res.unreachable && !res.noSelection && !pageError) pageError = res.error;
+    }
+  }
+
+  const text = (found[0]?.text || selectionTextHint || '').trim();
+  if (text) {
+    await ensureStateLoaded();
+    pickedFrom = null;
+    switchToQuestion(selectionTextQuestion(text));
+    return { ok: true, textOnly: true };
+  }
+
+  let url = '';
+  try {
+    url = (await chrome.tabs.get(tabId))?.url || '';
+  } catch (_) {}
+  return {
+    ok: false,
+    // The side panel offers the copied text (Cmd+C) instead, which works even where extensions can't read
+    canUseClipboard: true,
+    error: unreadablePageMessage(url) || pageError || unseenSelectionMessage(url, pdfViewers)
+  };
+}
+
+/** Why the selection wasn't visible, when the page itself could be read. */
+function unseenSelectionMessage(url, pdfViewers) {
+  if (pdfViewers > 0) {
+    return "This question is in a PDF viewer inside the page, and Chrome doesn't let extensions read what you select there.";
+  }
+  if (/^https:\/\/docs\.google\.com\/(document|presentation|spreadsheets)\//.test(url)) {
+    return "Google Docs draws its own text, so extensions can't see what you select.";
+  }
+  return "Chrome didn't report any selected text in the parts of this page the extension can read. The page may draw the text itself, or show it in a protected frame.";
+}
+
+// "Help with this selection" from the right-click menu
+if (chrome.contextMenus) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== SELECTION_MENU_ID || !tab?.id) return;
+
+    // Open synchronously: sidePanel.open() must run within the click's user gesture
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+    }
+
+    // The page script reads the selection with its formatting and images; if it can't, use the plain text
+    // Chrome hands the menu the selected text even where extensions can't run (e.g. its PDF viewer)
+    useSelectionInTab(tab.id, info.frameId || 0, info.selectionText || '').then(async (res) => {
+      if (!res.ok) {
+        await ensureStateLoaded();
+        latestState.error = res.error;
+        broadcastState();
+      }
+    });
+  });
+}

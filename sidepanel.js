@@ -48,6 +48,8 @@ const stepProgress = document.getElementById('stepProgress');
 const stepCaption = document.getElementById('stepCaption');
 const btnPickQuestion = document.getElementById('btnPickQuestion');
 const btnUnpin = document.getElementById('btnUnpin');
+const btnUseSelection = document.getElementById('btnUseSelection');
+const btnErrorAction = document.getElementById('btnErrorAction');
 const btnPasteQuestion = document.getElementById('btnPasteQuestion');
 const pasteBox = document.getElementById('pasteBox');
 const pasteInput = document.getElementById('pasteInput');
@@ -191,9 +193,11 @@ function updateStatusUI(state) {
   thinkingState.classList.toggle('hidden', state.status !== 'thinking');
 
   if (state.error) {
+    panelErrorActive = false;
+    btnErrorAction.classList.add('hidden');
     errorMessage.textContent = state.error;
     errorBanner.classList.remove('hidden');
-  } else {
+  } else if (!panelErrorActive) {
     errorBanner.classList.add('hidden');
   }
 
@@ -238,7 +242,7 @@ function updateStatusUI(state) {
  */
 function updateQuestionUI(question) {
   btnUnpin.classList.toggle('hidden', !question?.picked);
-  btnUnpin.textContent = { 'Pasted by you': '📌 Pasted ✕' }[question?.selectorUsed] || '📌 Your pick ✕';
+  btnUnpin.textContent = { 'Your selection': '📌 Your selection ✕', 'Pasted by you': '📌 Pasted ✕' }[question?.selectorUsed] || '📌 Your pick ✕';
   if (!hasQuestion(question)) {
     emptyQuestionState.classList.remove('hidden');
     detectedQuestionContent.classList.add('hidden');
@@ -477,6 +481,59 @@ function sendToActiveTab(msg, callback) {
 
 const PAGE_UNREACHABLE = "Can't read this page. If you just installed or reloaded Question Helper, refresh the page and try again.";
 
+// The background finds the frame holding the selection (quizzes are often in embedded frames)
+btnUseSelection.addEventListener('click', () => {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs[0]?.id) return showPanelError(`${PAGE_UNREACHABLE} Or click 📋 and paste the question in.`);
+    btnUseSelection.disabled = true;
+    safeSendMessage({ type: 'USE_SELECTION_IN_TAB', tabId: tabs[0].id }, async (res) => {
+      btnUseSelection.disabled = false;
+      if (res && res.ok) {
+        clearPanelError();
+        if (!pasteBox.classList.contains('hidden')) closePasteBox();
+        return;
+      }
+      const reason = res?.error || "Couldn't read your selection.";
+      if (res?.canUseClipboard) {
+        await offerCopiedText(reason);
+      } else {
+        showPanelError(`${reason} Click 📋 to paste the question in.`);
+      }
+    });
+  });
+});
+
+const COPY_KEYS = /Mac/i.test(navigator.platform) ? 'Cmd+C' : 'Ctrl+C';
+
+/**
+ * T couldn't see the selection on the page. Copying works almost everywhere (PDFs, Google Docs, protected
+ * frames), so offer what's on the clipboard, shown first so a stale copy is easy to spot.
+ */
+async function offerCopiedText(reason) {
+  let copied = '';
+  try {
+    copied = (await navigator.clipboard.readText()).trim();
+  } catch (_) {}
+  if (!copied) {
+    showPanelError(`${reason} Copy your selection with ${COPY_KEYS}, then click T again.`);
+    return;
+  }
+  const preview = copied.replace(/\s+/g, ' ').slice(0, 70);
+  showPanelError(
+    `${reason} You can use the text you copied instead. If it's not the question, copy the question with ${COPY_KEYS} and click T again.`,
+    {
+      label: `Use copied text: “${preview}${copied.length > 70 ? '…' : ''}”`,
+      title: copied.slice(0, 500),
+      onClick: () => {
+        safeSendMessage({ type: 'USE_PASTED_QUESTION', text: copied, images: [], asSelection: true }, (r) => {
+          if (r && r.ok) clearPanelError();
+          else showPanelError("Couldn't use the copied text. Click 📋 to paste it in.");
+        });
+      }
+    }
+  );
+}
+
 // --- Paste the question yourself (fallback) ---
 
 function renderPastedImages() {
@@ -590,16 +647,37 @@ btnUsePaste.addEventListener('click', () => {
   safeSendMessage({ type: 'USE_PASTED_QUESTION', text, images }, (res) => {
     if (res && res.ok) {
       closePasteBox();
-      errorBanner.classList.add('hidden');
+      clearPanelError();
     } else {
       showPanelError("Couldn't use the pasted question. Try again.");
     }
   });
 });
 
-function showPanelError(text) {
+// An error raised by the side panel itself (not the background), optionally with one action button.
+// It stays up until dismissed or replaced, even as the background sends state updates.
+let panelErrorActive = false;
+
+function showPanelError(text, action = null) {
+  panelErrorActive = true;
   errorMessage.textContent = text;
   errorBanner.classList.remove('hidden');
+  if (action) {
+    btnErrorAction.textContent = action.label;
+    btnErrorAction.title = action.title || action.label;
+    btnErrorAction.onclick = action.onClick;
+    btnErrorAction.classList.remove('hidden');
+  } else {
+    btnErrorAction.onclick = null;
+    btnErrorAction.classList.add('hidden');
+  }
+}
+
+function clearPanelError() {
+  panelErrorActive = false;
+  btnErrorAction.onclick = null;
+  btnErrorAction.classList.add('hidden');
+  errorBanner.classList.add('hidden');
 }
 
 function setPicking(on) {
@@ -624,6 +702,7 @@ btnPickQuestion.addEventListener('click', () => {
 });
 
 btnUnpin.addEventListener('click', () => {
+  safeSendMessage({ type: 'CLEAR_PICK' });
   sendToActiveTab({ type: 'UNPIN_QUESTION' });
 });
 
@@ -793,7 +872,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // Dismiss Error
 btnDismissError.addEventListener('click', () => {
-  errorBanner.classList.add('hidden');
+  clearPanelError();
   safeSendMessage({ type: 'DISMISS_ERROR' });
 });
 
