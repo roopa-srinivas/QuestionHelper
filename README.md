@@ -1,8 +1,8 @@
 # Question Helper (Chrome Extension - Manifest V3)
 
-**Question Helper** is an AI study tutor that lives in the Chrome Side Panel (`chrome.sidePanel` API). When you're working through practice problems, it reads the question on your active tab and walks you to the answer in three steps, one click at a time, with feedback on your own attempts along the way. It works with **Google Gemini** (free API key from Google AI Studio) or **Anthropic Claude**.
+**Question Helper** is an AI study tutor that lives in the Chrome Side Panel (`chrome.sidePanel` API). When you're working through practice problems, it reads the question on your active tab (or the one you pick) and walks you to the answer in three steps, one click at a time, with feedback on your own attempts along the way. It works with **Google Gemini** (free API key from Google AI Studio) or **Anthropic Claude**.
 
-**Status:** in progress. Step-by-step help, answer checking and course materials work today, and I'm still improving it.
+**Status:** in progress. Step-by-step help, answer checking, question picking and course materials work today, and I'm still improving it.
 
 It's built for practice and homework you're allowed to get help on. Don't use it on graded exams or anywhere outside help isn't permitted.
 
@@ -10,11 +10,12 @@ It's built for practice and homework you're allowed to get help on. Don't use it
 
 ## 🎓 How Tutoring Works
 
-1. **👣 Step 1 → Step 2 → Step 3: Answer**: One click per step, and each builds on the last.
+1. **🎯 Choose the question** (optional): The panel follows the question you're looking at. To lock onto a specific one, click 🎯, then click the question on the page (<kbd>↑</kbd>/<kbd>↓</kbd> to select more or less, <kbd>Esc</kbd> to cancel). It stays put while you scroll; click **📌 Your pick ✕** to go back to automatic.
+2. **👣 Step 1 → Step 2 → Step 3: Answer**: One click per step, and each builds on the last.
    - **Step 1** names the concept the question tests and the first move: what to identify, set up or recall.
    - **Step 2** works through the main reasoning (and rules out wrong choices), stopping one move short of the answer.
    - **Step 3** finishes it: the final answer, a key takeaway, and the most common mistake.
-2. **Check my answer**: At any point, type your answer and/or reasoning. The tutor tells you whether you're on track. If you're wrong, it points to the step or misconception that went off course without revealing the answer (unless you've already reached step 3).
+3. **Check my answer**: At any point, type your answer and/or reasoning. The tutor tells you whether you're on track. If you're wrong, it points to the step or misconception that went off course without revealing the answer (unless you've already reached step 3).
 
 Each question keeps its own conversation. If you move to the next question and come back, your steps and attempts are still there. Use the ↺ button on the tutor card to start a question over.
 
@@ -44,6 +45,8 @@ Scanned PDFs (pictures of pages) have no text layer, so they can't be read. Cour
   - **Anthropic Claude**: Claude Opus 5.5 (default), Sonnet 5.5 or Haiku 5.5 with your Anthropic Console key.
 - **Grounded in Your Course**: Upload textbook chapters or notes and the tutor uses their definitions and cites their pages (see [Course Materials](#-course-materials)).
 - **Automatic Question Detection**: A debounced (~400ms) `MutationObserver` picks up the new question when you click **Next** or navigate.
+- **Choose the Question**: Click 🎯 and then the question on the page. It stays pinned while you scroll and answer other questions.
+- **Diagrams**: Inline SVG diagrams in a 🎯-picked question are converted to images (with the page's colors and fonts) so the model can see them.
 - **Streaming Replies**: The tutor's replies stream in as they're written.
 - **Images & Diagrams**:
   - Extracts `<canvas>` graphs, diagrams and `<img>` figures from the question and sends them to the vision model.
@@ -149,10 +152,10 @@ If the panel shows the wrong question, click the ↻ button on the question card
 QuestionHelper/
 ├── manifest.json         # Manifest V3 configuration & permissions
 ├── background.js         # Service worker: tutoring sessions, Gemini/Claude streaming, tab capture
-├── content.js            # Content script: question extraction & debounced MutationObserver
+├── content.js            # Content script: question extraction, debounced MutationObserver, question picker
 ├── sidepanel.html        # Side panel layout
 ├── sidepanel.css         # Light theme styles for the side panel
-├── sidepanel.js          # Side panel UI: conversation, step/attempt controls, markdown renderer
+├── sidepanel.js          # Side panel UI: conversation, step/attempt controls, question picker, markdown renderer
 ├── options.html          # Options / settings page
 ├── options.css           # Options page styling
 ├── options.js            # Settings controller (API keys, models, tutor preferences, site selectors)
